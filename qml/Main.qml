@@ -52,6 +52,24 @@ ApplicationWindow {
         openFolder(path);
     }
 
+    // A short notice at the bottom left. options: { icon, actionText, action, busy, duration }.
+    function toast(message, options) {
+        notice.show(message, options);
+    }
+
+    function rescanLibrary() {
+        toast(qsTr("Looking for videos…"), { busy: true });
+        VideoLibrary.rescan();
+    }
+
+    // Removing a library folder can be undone from the notice.
+    function removeLibraryFolder(path) {
+        const name = VideoLibrary.folderName(path);
+        VideoLibrary.removeLibraryFolder(path);
+        toast(qsTr("Removed %1 from your library").arg(name),
+              { icon: "folder", actionText: qsTr("Undo"), action: () => VideoLibrary.addLibraryFolder(path), duration: 8000 });
+    }
+
     function openFileDialog() {
         fileDialog.open();
     }
@@ -185,22 +203,41 @@ ApplicationWindow {
         }
     }
 
-    // "SANDISK (E:) connected · 34 videos", with a way to open it.
+    // The player, over everything else.
+    WatchView {
+        id: watch
+        anchors.fill: parent
+    }
+
+    // A short message at the bottom left, above everything (the player too): what an
+    // action did, with an optional button (Open, Undo) and a spinner for work in progress.
     Rectangle {
         id: notice
 
-        property string drivePath
+        property string iconName: "check"
+        property string actionText
+        property var action: null
+        property bool busy: false
 
-        function show(message, path) {
+        function show(message, options) {
+            const o = options ?? {};
             noticeText.text = message;
-            drivePath = path;
+            iconName = o.icon ?? "check";
+            actionText = o.actionText ?? "";
+            action = o.action ?? null;
+            busy = o.busy ?? false;
             opacity = 1;
-            noticeTimer.restart();
+            if (busy) {
+                noticeTimer.stop();
+            } else {
+                noticeTimer.interval = o.duration ?? 5000;
+                noticeTimer.restart();
+            }
         }
 
         x: rail.width + 20
         y: window.height - height - 20
-        width: noticeRow.implicitWidth + 28
+        width: Math.min(noticeRow.implicitWidth + 32, window.width - x - 20)
         height: 52
         radius: Theme.radiusCard
         color: Theme.surfaceHigh
@@ -209,33 +246,52 @@ ApplicationWindow {
         visible: opacity > 0
         Behavior on opacity { NumberAnimation { duration: 200 } }
 
+        // Clicks on the notice shouldn't reach the page or video underneath.
+        MouseArea {
+            anchors.fill: parent
+        }
+
         RowLayout {
             id: noticeRow
             anchors.verticalCenter: parent.verticalCenter
             x: 16
+            width: parent.width - 32
             spacing: 12
 
             Icon {
-                name: "usb"
+                name: notice.busy ? "refresh" : notice.iconName
                 color: Theme.accent
+                RotationAnimation on rotation {
+                    running: notice.busy && notice.visible
+                    loops: Animation.Infinite
+                    from: 0
+                    to: 360
+                    duration: 900
+                    onStopped: parent.rotation = 0
+                }
             }
             Text {
                 id: noticeText
+                Layout.fillWidth: true
                 color: Theme.textPrimary
                 font.pixelSize: 14
+                elide: Text.ElideRight
             }
             TextAction {
-                text: qsTr("Open")
+                visible: notice.actionText !== ""
+                text: notice.actionText
                 onClicked: {
+                    const action = notice.action;
                     notice.opacity = 0;
-                    window.openDrive(notice.drivePath);
+                    if (action)
+                        action();
                 }
             }
         }
 
         Timer {
             id: noticeTimer
-            interval: 6000
+            interval: 5000
             onTriggered: notice.opacity = 0
         }
     }
@@ -244,24 +300,31 @@ ApplicationWindow {
         target: VideoLibrary
 
         function onDriveConnected(name, path, count) {
-            notice.show(count === 0 ? qsTr("%1 connected  •  no videos found").arg(name)
-                      : count === 1 ? qsTr("%1 connected  •  1 video").arg(name)
-                      : qsTr("%1 connected  •  %2 videos").arg(name).arg(count), path);
+            window.toast(count === 0 ? qsTr("%1 connected  •  no videos found").arg(name)
+                       : count === 1 ? qsTr("%1 connected  •  1 video").arg(name)
+                       : qsTr("%1 connected  •  %2 videos").arg(name).arg(count),
+                         { icon: "usb", actionText: qsTr("Open"), action: () => window.openDrive(path), duration: 7000 });
         }
 
-        function onDriveRemoved(path) {
+        function onDriveRemoved(path, name) {
             // Back out of the drive's folders, which are now empty.
             while (contentStack.depth > 1 && String(contentStack.currentItem.folder ?? "").startsWith(path))
                 contentStack.pop(StackView.Immediate);
-            if (notice.drivePath === path)
-                notice.opacity = 0;
+            window.toast(qsTr("%1 removed").arg(name), { icon: "usb" });
         }
-    }
 
-    // The player, over everything else.
-    WatchView {
-        id: watch
-        anchors.fill: parent
+        function onRescanFinished(count, added, removed) {
+            const videos = count === 1 ? qsTr("1 video") : qsTr("%1 videos").arg(count);
+            const changes = [added > 0 ? qsTr("%1 new").arg(added) : "",
+                             removed > 0 ? qsTr("%1 no longer found").arg(removed) : ""].filter(part => part);
+            window.toast(changes.length > 0 ? qsTr("Library updated  •  %1  •  %2").arg(videos).arg(changes.join(", "))
+                                            : qsTr("Library is up to date  •  %1").arg(videos));
+        }
+
+        function onLibraryFolderAdded(name, path, count) {
+            window.toast(qsTr("%1 added to your library  •  %2").arg(name)
+                         .arg(count === 1 ? qsTr("1 video") : qsTr("%1 videos").arg(count)), { icon: "folder" });
+        }
     }
 
     // "Close Better Video Player?" while a video is playing.
