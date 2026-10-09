@@ -42,20 +42,31 @@ rest of its folder (as a playlist) followed by more videos. The same video can s
 | Swipe the mini player down or sideways | Close it |
 | Click the video | Play / pause |
 | Double-click the middle of the video | Full screen |
-| Double-click the left or right side | Back or forward 10s (keep tapping to skip more) |
+| Double-click the left or right side | Skip back or forward (keep tapping to skip more) |
 
 | Key | Action |
 |---|---|
 | Space / K | Play / pause |
 | ← / → | Seek -5s / +5s |
-| J / L | Seek -10s / +10s |
+| J / L | Skip back / forward (10s; change it in Settings) |
 | Shift+P / Shift+N | Previous / next video in the folder |
 | ↑ / ↓ | Volume ±5 |
 | M | Mute |
+| C | Subtitles on / off |
 | F | Full screen |
 | I | Mini player, and back |
 | Esc | Leave full screen, or shrink to the mini player |
 | Ctrl+O | Open a file (drag & drop also works) |
+
+### Subtitles
+
+When a video has a subtitle file that seems to belong to it, the player offers it the first
+time you open the video ("Subtitles found: Turn on / No thanks") and remembers your answer.
+A subtitle file matches when it has the same name, ignoring case, spaces and punctuation, with an
+optional language tag (`Movie.en.srt`); or the same episode (`S01E02`, `1x02`, "Season 1 Episode
+2"); or when it is in a folder that holds just that one video. `Subs` and `Subtitles` folders next
+to the video count too. The subtitles button on the video lists every track, built-in or from a
+file, and can add a subtitle file by hand.
 
 ## The library
 

@@ -162,6 +162,50 @@ ScrollView {
             color: "#F05252"
         }
 
+        // --- Player ------------------------------------------------------------
+        SectionTitle { text: qsTr("Player") }
+        Note {
+            text: qsTr("How far to skip when you double-click the left or right side of a video (or press J / L).")
+        }
+
+        Row {
+            Layout.leftMargin: Theme.pagePadding
+            Layout.topMargin: 14
+            spacing: 8
+
+            Repeater {
+                model: [5, 10, 15, 30]
+
+                delegate: AbstractButton {
+                    id: option
+
+                    required property int modelData
+                    readonly property bool selected: ApplicationWindow.window.skipSeconds === modelData
+
+                    hoverEnabled: true
+                    focusPolicy: Qt.NoFocus
+                    leftPadding: 18
+                    rightPadding: 18
+                    topPadding: 9
+                    bottomPadding: 9
+                    onClicked: ApplicationWindow.window.skipSeconds = modelData
+
+                    HoverHandler { cursorShape: Qt.PointingHandCursor }
+
+                    background: Rectangle {
+                        radius: height / 2
+                        color: option.selected ? Theme.accent : option.hovered ? "#2E2E2E" : Theme.surfaceHigh
+                    }
+                    contentItem: Text {
+                        text: qsTr("%1 seconds").arg(option.modelData)
+                        color: option.selected ? Theme.accentText : Theme.textPrimary
+                        font.pixelSize: 14
+                        font.weight: Font.DemiBold
+                    }
+                }
+            }
+        }
+
         // --- About -------------------------------------------------------------
         SectionTitle { text: qsTr("About") }
         Note {
