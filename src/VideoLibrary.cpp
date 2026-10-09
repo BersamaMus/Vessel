@@ -192,7 +192,7 @@ VideoLibrary::VideoLibrary(QObject *parent)
 
     m_folders = new FolderModel(this, QString(), FolderModel::TopFolders, this);
 
-    rescan();
+    scanAll();
 
     m_driveWatcher = new DriveWatcher(this);
     connect(m_driveWatcher, &DriveWatcher::drivesChanged, this, &VideoLibrary::onDrivesChanged);
@@ -260,6 +260,20 @@ QVariantList VideoLibrary::drives() const
 
 void VideoLibrary::rescan()
 {
+    m_beforeRescan.clear();
+    for (const VideoInfo &v : std::as_const(m_videos))
+        if (!v.external)
+            m_beforeRescan.insert(v.path);
+    m_reportRescan = true;
+    scanAll();
+    if (m_pendingScans == 0) {   // nothing to scan
+        m_reportRescan = false;
+        emit rescanFinished(0, 0, int(m_beforeRescan.size()));
+    }
+}
+
+void VideoLibrary::scanAll()
+{
     for (const VideoSource &source : std::as_const(m_sources))
         scanSource(source.path);
 }
@@ -298,10 +312,23 @@ void VideoLibrary::onScanFinished(const QString &path, QList<VideoInfo> videos)
             emit drivesChanged();
             if (std::exchange(source.announce, false))
                 emit driveConnected(source.name, source.path, found);
+        } else if (std::exchange(source.announce, false)) {
+            emit libraryFolderAdded(folderName(source.path), source.path, found);
         }
     }
-    if (m_pendingScans == 0)
+    if (m_pendingScans == 0) {
         emit scanningChanged();
+        if (std::exchange(m_reportRescan, false)) {
+            QSet<QString> now;
+            for (const VideoInfo &v : std::as_const(m_videos))
+                if (!v.external)
+                    now.insert(v.path);
+            const int added = int((now - m_beforeRescan).size());
+            const int removed = int((m_beforeRescan - now).size());
+            m_beforeRescan.clear();
+            emit rescanFinished(int(now.size()), added, removed);
+        }
+    }
 }
 
 void VideoLibrary::onDrivesChanged()
@@ -319,7 +346,7 @@ void VideoLibrary::onDrivesChanged()
         if (present)
             continue;
         const QString path = source.path;
-        emit driveRemoved(path);   // while its videos are still known, so progress can be saved
+        emit driveRemoved(path, source.name);   // while its videos are still known, so progress can be saved
         m_sources.removeAt(i);
         m_scanned.remove(path);
         removed = true;
@@ -380,6 +407,7 @@ QString VideoLibrary::addLibraryFolder(const QString &input)
 
     VideoSource source;
     source.path = path;
+    source.announce = true;
     m_sources.insert(position, source);
     saveLibraryFolders();
     emit libraryFoldersChanged();

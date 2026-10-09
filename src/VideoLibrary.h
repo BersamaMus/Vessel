@@ -6,6 +6,7 @@
 #include <QList>
 #include <QObject>
 #include <QPointer>
+#include <QSet>
 #include <QTimer>
 #include <QUrl>
 #include <QVariantList>
@@ -48,7 +49,7 @@ struct VideoSource
     qint64 bytesTotal = 0;
     qint64 bytesFree = 0;
     bool scanning = false;
-    bool announce = false;  // say so when its first scan finishes (just plugged in)
+    bool announce = false;  // say so when its first scan finishes (just plugged in, or added)
 };
 
 // The videos in the library folders (the user's Videos folder by default) and
@@ -91,6 +92,7 @@ public:
     VideoModel *quickPicks() const { return m_quickPicks; }
     FolderModel *folders() const { return m_folders; }
 
+    // Looks for new and removed videos; rescanFinished() reports what changed.
     Q_INVOKABLE void rescan();
     Q_INVOKABLE void reshuffleQuickPicks();
     // Returns an error message, or "" when the folder was added.
@@ -152,9 +154,14 @@ signals:
     // A drive was plugged in and scanned.
     void driveConnected(const QString &name, const QString &path, int count);
     // A drive is being removed; its videos are still listed while this is handled.
-    void driveRemoved(const QString &path);
+    void driveRemoved(const QString &path, const QString &name);
+    // A rescan the user asked for is done: how many library videos, and how many came and went.
+    void rescanFinished(int count, int added, int removed);
+    // A library folder the user just added has been scanned.
+    void libraryFolderAdded(const QString &name, const QString &path, int count);
 
 private:
+    void scanAll();
     void scanSource(const QString &path);
     void onScanFinished(const QString &path, QList<VideoInfo> videos);
     void onDrivesChanged();
@@ -179,6 +186,9 @@ private:
     QList<VideoSource> m_sources;                 // library folders first, then drives
     QHash<QString, QList<VideoInfo>> m_scanned;   // source path -> its videos
     int m_pendingScans = 0;
+    // The library before a user-requested rescan, to report what changed (empty: not reporting).
+    QSet<QString> m_beforeRescan;
+    bool m_reportRescan = false;
 
     QList<VideoInfo> m_videos;
     QHash<QString, int> m_byPath;

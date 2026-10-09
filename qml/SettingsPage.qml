@@ -130,7 +130,7 @@ ScrollView {
                                 iconName: "close"
                                 iconColor: Theme.textSecondary
                                 tip: qsTr("Remove from library")
-                                onClicked: VideoLibrary.removeLibraryFolder(row.modelData)
+                                onClicked: ApplicationWindow.window.removeLibraryFolder(row.modelData)
                             }
                         }
                     }
@@ -152,7 +152,7 @@ ScrollView {
                 text: VideoLibrary.scanning ? qsTr("Scanning…") : qsTr("Rescan")
                 iconName: "refresh"
                 enabled: !VideoLibrary.scanning
-                onClicked: VideoLibrary.rescan()
+                onClicked: ApplicationWindow.window.rescanLibrary()
             }
         }
 

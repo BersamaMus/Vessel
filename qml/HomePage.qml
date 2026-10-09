@@ -42,7 +42,7 @@ ScrollView {
                     id: menu
                     AppMenuItem {
                         text: qsTr("Rescan library")
-                        onTriggered: VideoLibrary.rescan()
+                        onTriggered: page.app.rescanLibrary()
                     }
                     AppMenuItem {
                         text: qsTr("Open a file…")

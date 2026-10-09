@@ -126,6 +126,7 @@ Item {
         subtitleCandidates.forEach((file, i) => mpv.addSubtitleFile(file, i === 0));
         VideoLibrary.setSubtitleChoice(path, subtitleCandidates[0]);
         subtitleOffer = "";
+        flash("subtitles", qsTr("Subtitles: %1").arg(subtitleCandidates[0].split("/").pop()));
     }
 
     function declineSubtitles() {
@@ -139,8 +140,10 @@ Item {
             chooseSubtitle(null);
         else if (mpv.subtitleTracks.length > 0)
             chooseSubtitle(mpv.subtitleTracks[0]);
-        else
+        else if (subtitleCandidates.length > 0)
             acceptSubtitles();   // load what was found, even if declined before
+        else
+            flash("subtitles", qsTr("No subtitles for this video"));
         wake();
     }
 
@@ -150,9 +153,11 @@ Item {
         if (!track) {
             mpv.setSubtitleTrack(0);
             VideoLibrary.setSubtitleChoice(path, "");
+            flash("subtitles", qsTr("Subtitles off"));
             return;
         }
         mpv.setSubtitleTrack(track.id);
+        flash("subtitles", qsTr("Subtitles: %1").arg(track.label));
         if (track.file)
             VideoLibrary.setSubtitleChoice(path, track.file);
     }
@@ -162,12 +167,14 @@ Item {
         return x < frame.width / 3 ? -1 : x > frame.width * 2 / 3 ? 1 : 0;
     }
 
-    function tapSeek(side) {
+    // Skips back (-1) or forward (1), adding up on the side bubble: double-taps and keys.
+    function tapSeek(side, seconds) {
+        const amount = seconds ?? app.skipSeconds;
         if (side !== seekSide)
             seekTotal = 0;
         seekSide = side;
-        seekTotal += app.skipSeconds;
-        mpv.seekRelative(side * app.skipSeconds);
+        seekTotal += amount;
+        mpv.seekRelative(side * amount);
         seekBurst.restart();
     }
 
@@ -234,6 +241,28 @@ Item {
         mpv.volume = value;
         app.volume = value;
         wake();
+    }
+
+    // Up / Down keys.
+    function stepVolume(delta) {
+        const value = Math.max(0, Math.min(100, Math.round(mpv.volume) + delta));
+        setVolume(value);
+        flash(value === 0 ? "volume_off" : "volume", value + "%");
+    }
+
+    function toggleMute() {
+        const muting = !mpv.muted;
+        mpv.muted = muting;
+        flash(muting ? "volume_off" : "volume", muting ? qsTr("Muted") : qsTr("Sound on"));
+        wake();
+    }
+
+    // A brief pill at the top of the video saying what just changed.
+    function flash(iconName, text) {
+        indicator.iconName = iconName;
+        indicatorText.text = text;
+        indicator.opacity = 1;
+        indicatorTimer.restart();
     }
 
     function scrollQueueToCurrent() {
@@ -969,6 +998,7 @@ Item {
                             tip: checked ? qsTr("Autoplay is on") : qsTr("Autoplay is off")
                             onClicked: {
                                 watch.app.autoplay = !watch.app.autoplay;
+                                watch.flash("play", watch.app.autoplay ? qsTr("Autoplay on") : qsTr("Autoplay off"));
                                 if (!watch.app.autoplay)
                                     watch.cancelAutoplay();
                                 else if (mpv.ended && watch.nextPath !== "")
@@ -1103,6 +1133,48 @@ Item {
                         font.weight: Font.DemiBold
                     }
                 }
+            }
+        }
+
+        // --- What just changed: "45%", "Subtitles off", "Autoplay on" -------------
+        Rectangle {
+            id: indicator
+
+            property string iconName
+
+            anchors.horizontalCenter: parent.horizontalCenter
+            y: watch.miniProgress > 0.5 ? 10 : 20
+            width: indicatorRow.implicitWidth + 28
+            height: 40
+            radius: 20
+            color: "#D9000000"
+            opacity: 0
+            visible: opacity > 0
+            Behavior on opacity { NumberAnimation { duration: 180 } }
+
+            Row {
+                id: indicatorRow
+                anchors.centerIn: parent
+                spacing: 8
+                Icon {
+                    anchors.verticalCenter: parent.verticalCenter
+                    name: indicator.iconName
+                    size: 20
+                    color: Theme.accent
+                }
+                Text {
+                    id: indicatorText
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: Theme.textPrimary
+                    font.pixelSize: 14
+                    font.weight: Font.DemiBold
+                }
+            }
+
+            Timer {
+                id: indicatorTimer
+                interval: 1200
+                onTriggered: indicator.opacity = 0
             }
         }
 
@@ -1290,6 +1362,7 @@ Item {
         onAccepted: {
             const file = VideoLibrary.localPath(selectedFile);
             mpv.addSubtitleFile(file);
+            watch.flash("subtitles", qsTr("Subtitles: %1").arg(file.split("/").pop()));
             VideoLibrary.setSubtitleChoice(watch.path, file);
             watch.subtitleOffer = "";
         }
@@ -1300,13 +1373,13 @@ Item {
         enabled: watch.mode === "watch" || watch.mode === "full"
     }
     Key { sequences: ["Space", "K"]; onActivated: { mpv.togglePause(); watch.wake(); } }
-    Key { sequence: "Left"; onActivated: { mpv.seekRelative(-5); watch.wake(); } }
-    Key { sequence: "Right"; onActivated: { mpv.seekRelative(5); watch.wake(); } }
-    Key { sequence: "J"; onActivated: { mpv.seekRelative(-watch.app.skipSeconds); watch.wake(); } }
-    Key { sequence: "L"; onActivated: { mpv.seekRelative(watch.app.skipSeconds); watch.wake(); } }
-    Key { sequence: "Up"; onActivated: watch.setVolume(Math.min(100, mpv.volume + 5)) }
-    Key { sequence: "Down"; onActivated: watch.setVolume(Math.max(0, mpv.volume - 5)) }
-    Key { sequence: "M"; onActivated: { mpv.muted = !mpv.muted; watch.wake(); } }
+    Key { sequence: "Left"; onActivated: watch.tapSeek(-1, 5) }
+    Key { sequence: "Right"; onActivated: watch.tapSeek(1, 5) }
+    Key { sequence: "J"; onActivated: watch.tapSeek(-1) }
+    Key { sequence: "L"; onActivated: watch.tapSeek(1) }
+    Key { sequence: "Up"; onActivated: watch.stepVolume(5) }
+    Key { sequence: "Down"; onActivated: watch.stepVolume(-5) }
+    Key { sequence: "M"; onActivated: watch.toggleMute() }
     Key { sequence: "F"; onActivated: watch.toggleFull() }
     Key { sequence: "I"; onActivated: watch.minimize() }
     Key { sequence: "Shift+N"; onActivated: watch.playNext() }
