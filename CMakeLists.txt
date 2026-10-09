@@ -67,6 +67,7 @@ set(QML_FILES
     qml/AppMenu.qml
     qml/AppMenuItem.qml
     qml/AppSlider.qml
+    qml/AppSwitch.qml
     qml/RoundedImage.qml
     qml/EmptyNote.qml
     qml/VideoCard.qml

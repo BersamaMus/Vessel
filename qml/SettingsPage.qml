@@ -250,23 +250,9 @@ ScrollView {
                     }
                 }
 
-                // The switch.
-                Rectangle {
-                    implicitWidth: 44
-                    implicitHeight: 24
-                    radius: 12
-                    color: autoplayRow.on ? Theme.accent : "#3A3A3A"
-                    Behavior on color { ColorAnimation { duration: 150 } }
-
-                    Rectangle {
-                        x: autoplayRow.on ? parent.width - width - 3 : 3
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 18
-                        height: 18
-                        radius: 9
-                        color: autoplayRow.on ? Theme.accentText : Theme.textSecondary
-                        Behavior on x { NumberAnimation { duration: 150; easing.type: Easing.OutCubic } }
-                    }
+                AppSwitch {
+                    checked: autoplayRow.on
+                    onClicked: ApplicationWindow.window.autoplay = !autoplayRow.on
                 }
             }
         }

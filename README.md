@@ -35,7 +35,7 @@ rest of its folder (as a playlist) followed by more videos. The same video can s
 **mini player** in the corner, so you can keep browsing while it plays, or go **full screen**.
 
 When a video ends, the next one in its folder plays after a 5-second "Up next" countdown
-(Cancel or Play now; Autoplay can be turned off in Settings). Closing the app while a video is
+(Cancel or Play now; turn Autoplay off with the switch next to the volume, or in Settings). Closing the app while a video is
 playing asks first.
 
 | Gesture (mouse drag or touch) | Action |

@@ -959,6 +959,22 @@ Item {
                                 }
                             }
                         }
+                        AppSwitch {
+                            Layout.leftMargin: 6
+                            Layout.rightMargin: 6
+                            implicitWidth: 36
+                            implicitHeight: 20
+                            knobIcon: "play"
+                            checked: watch.app.autoplay
+                            tip: checked ? qsTr("Autoplay is on") : qsTr("Autoplay is off")
+                            onClicked: {
+                                watch.app.autoplay = !watch.app.autoplay;
+                                if (!watch.app.autoplay)
+                                    watch.cancelAutoplay();
+                                else if (mpv.ended && watch.nextPath !== "")
+                                    watch.startAutoplay();
+                            }
+                        }
                         IconButton {
                             iconName: mpv.muted || mpv.volume === 0 ? "volume_off" : "volume"
                             tip: qsTr("Mute (M)")
