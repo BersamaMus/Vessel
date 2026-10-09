@@ -110,7 +110,8 @@ public:
     Q_INVOKABLE QString folderOf(const QString &path) const;
     // The video after this one in its folder, or "" at the end.
     Q_INVOKABLE QString nextInFolder(const QString &path) const;
-    // A random selection of other videos, preferring other folders.
+    // A random selection of videos from other folders: on the same drive for a
+    // drive's video, otherwise from the library.
     Q_INVOKABLE VideoModel *suggestionsFor(const QString &path);
     Q_INVOKABLE double resumePosition(const QString &path) const;
     Q_INVOKABLE void saveProgress(const QString &path, double position, double duration);
