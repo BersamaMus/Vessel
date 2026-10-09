@@ -26,12 +26,15 @@ Item {
     readonly property var app: ApplicationWindow.window
     readonly property var details: path !== "" && VideoLibrary.count >= 0 ? VideoLibrary.detailsOf(path) : ({})
     readonly property string title: details.title ?? ""
+    readonly property bool playing: mode !== "closed" && mpv.loaded && !mpv.paused && !mpv.ended
     readonly property string nextPath: path !== "" && VideoLibrary.count >= 0 ? VideoLibrary.nextInFolder(path) : ""
     readonly property string previousPath: path !== "" && VideoLibrary.count >= 0 ? VideoLibrary.previousInFolder(path) : ""
     // The double-tap skip in progress: which side, and how far so far.
     property int seekSide: 0
     property int seekTotal: 0
     // Subtitle files found for this video, and the one being offered ("" for no prompt).
+    // Seconds until the next video autoplays; 0 when no countdown is running.
+    property int autoplayCountdown: 0
     property var subtitleCandidates: []
     property string subtitleOffer: ""
     // Controls showing on the video: subtitles move up out of their way.
@@ -72,6 +75,7 @@ Item {
         saveProgress();
         lastPosition = 0;
         lastDuration = 0;
+        cancelAutoplay();
         errorText.text = "";
         path = newPath;
         mpv.volume = app.volume;
@@ -97,6 +101,17 @@ Item {
     function playNext() {
         if (nextPath)
             open(nextPath);
+    }
+
+    // Autoplay: count down on the "Up next" card, then play the next video in the folder.
+    function startAutoplay() {
+        autoplayCountdown = 5;
+        autoplayTimer.restart();
+    }
+
+    function cancelAutoplay() {
+        autoplayTimer.stop();
+        autoplayCountdown = 0;
     }
 
     function playPrevious() {
@@ -192,6 +207,7 @@ Item {
 
     function close() {
         saveProgress();
+        cancelAutoplay();
         if (app.isFullScreen)
             app.toggleFullScreen();
         mpv.stop();
@@ -259,6 +275,18 @@ Item {
 
     NumberAnimation { id: miniAnim; target: watch; property: "miniProgress"; duration: 320; easing.type: Easing.OutCubic }
     NumberAnimation { id: fullAnim; target: watch; property: "fullProgress"; duration: 250; easing.type: Easing.OutCubic }
+
+    Timer {
+        id: autoplayTimer
+        interval: 1000
+        repeat: true
+        onTriggered: {
+            if (--watch.autoplayCountdown <= 0) {
+                stop();
+                watch.playNext();
+            }
+        }
+    }
 
     Timer {
         id: clickTimer
@@ -605,9 +633,15 @@ Item {
                 watch.saveProgress();
                 watch.wake();
             }
-            onEndedChanged: if (ended) {
-                watch.saveProgress();
-                watch.wake();
+            onEndedChanged: {
+                if (ended) {
+                    watch.saveProgress();
+                    watch.wake();
+                    if (watch.app.autoplay && watch.nextPath !== "")
+                        watch.startAutoplay();
+                } else {
+                    watch.cancelAutoplay();   // e.g. seeked back from the end
+                }
             }
             onErrorOccurred: message => errorText.text = message
         }
@@ -690,8 +724,19 @@ Item {
 
         HoverHandler {
             id: frameHover
+
+            // Where the mouse last really moved. Qt re-sends hover events whenever the
+            // (constantly redrawing) video changes under a still mouse; those aren't movement.
+            property point lastMove: Qt.point(-1, -1)
+
             cursorShape: watch.mode !== "mini" && !watch.controlsShown ? Qt.BlankCursor : Qt.ArrowCursor
-            onPointChanged: watch.wake()
+            onPointChanged: {
+                const p = point.scenePosition;
+                if (Math.abs(p.x - lastMove.x) + Math.abs(p.y - lastMove.y) < 3)
+                    return;
+                lastMove = p;
+                watch.wake();
+            }
             onHoveredChanged: hovered ? leaveTimer.stop() : leaveTimer.restart()
         }
 
@@ -782,6 +827,7 @@ Item {
             Row {
                 anchors.centerIn: parent
                 spacing: 20
+                visible: watch.autoplayCountdown === 0   // the "Up next" card takes the middle
 
                 IconButton {
                     anchors.verticalCenter: parent.verticalCenter
@@ -1041,6 +1087,134 @@ Item {
                         font.weight: Font.DemiBold
                     }
                 }
+            }
+        }
+
+        // --- Autoplay: "Up next" card ----------------------------------------------
+        Rectangle {
+            id: upNext
+
+            readonly property bool large: watch.miniProgress < 0.5
+
+            anchors.centerIn: parent
+            width: large ? Math.min(parent.width - 48, 300) : parent.width
+            height: large ? upNextColumn.implicitHeight + 32 : 34
+            anchors.verticalCenterOffset: large ? 0 : (parent.height - height) / 2
+            radius: large ? Theme.radiusCard : 0
+            color: large ? "#F21C1C1C" : "#CC000000"
+            border.color: large ? "#26FFFFFF" : "transparent"
+            opacity: watch.autoplayCountdown > 0 ? 1 : 0
+            visible: opacity > 0
+            Behavior on opacity { NumberAnimation { duration: 200 } }
+
+            // Clicks on the card itself shouldn't pause the video.
+            MouseArea {
+                anchors.fill: parent
+            }
+
+            ColumnLayout {
+                id: upNextColumn
+                visible: upNext.large
+                anchors.fill: parent
+                anchors.margins: 16
+                spacing: 10
+
+                Text {
+                    text: qsTr("Up next in %1").arg(watch.autoplayCountdown)
+                    color: Theme.textSecondary
+                    font.pixelSize: 13
+                    font.weight: Font.DemiBold
+                }
+
+                Item {
+                    Layout.fillWidth: true
+                    implicitHeight: width * 9 / 16
+                    RoundedImage {
+                        anchors.fill: parent
+                        radius: Theme.radiusArt
+                        source: watch.nextPath !== "" ? VideoLibrary.thumbnailFor(watch.nextPath) : ""
+                    }
+                    // Drains over the countdown.
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.bottom: parent.bottom
+                        anchors.margins: 8
+                        height: 4
+                        radius: 2
+                        color: Theme.accent
+                        width: (parent.width - 16) * watch.autoplayCountdown / 5
+                        Behavior on width { NumberAnimation { duration: 1000 } }
+                    }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: watch.nextPath !== "" ? VideoLibrary.titleOf(watch.nextPath) : ""
+                    color: Theme.textPrimary
+                    font.pixelSize: 15
+                    font.weight: Font.Bold
+                    wrapMode: Text.Wrap
+                    maximumLineCount: 2
+                    elide: Text.ElideRight
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    AbstractButton {
+                        id: cancelButton
+                        Layout.fillWidth: true
+                        text: qsTr("Cancel")
+                        hoverEnabled: true
+                        focusPolicy: Qt.NoFocus
+                        padding: 10
+                        onClicked: watch.cancelAutoplay()
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+                        background: Rectangle {
+                            radius: height / 2
+                            color: cancelButton.hovered ? "#3A3A3A" : "#2A2A2A"
+                        }
+                        contentItem: Text {
+                            text: cancelButton.text
+                            horizontalAlignment: Text.AlignHCenter
+                            color: Theme.textPrimary
+                            font.pixelSize: 14
+                            font.weight: Font.DemiBold
+                        }
+                    }
+                    AbstractButton {
+                        id: playNowButton
+                        Layout.fillWidth: true
+                        text: qsTr("Play now")
+                        hoverEnabled: true
+                        focusPolicy: Qt.NoFocus
+                        padding: 10
+                        onClicked: watch.playNext()
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+                        background: Rectangle {
+                            radius: height / 2
+                            color: playNowButton.hovered ? Qt.lighter(Theme.accent, 1.1) : Theme.accent
+                        }
+                        contentItem: Text {
+                            text: playNowButton.text
+                            horizontalAlignment: Text.AlignHCenter
+                            color: Theme.accentText
+                            font.pixelSize: 14
+                            font.weight: Font.Bold
+                        }
+                    }
+                }
+            }
+
+            // In the mini player, just a line along the bottom.
+            Text {
+                visible: !upNext.large
+                anchors.centerIn: parent
+                text: qsTr("Up next in %1").arg(watch.autoplayCountdown)
+                color: Theme.textPrimary
+                font.pixelSize: 13
+                font.weight: Font.DemiBold
             }
         }
 

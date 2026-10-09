@@ -34,6 +34,10 @@ Playing a video opens the **watch page**: the video, its details below, and on t
 rest of its folder (as a playlist) followed by more videos. The same video can shrink into a
 **mini player** in the corner, so you can keep browsing while it plays, or go **full screen**.
 
+When a video ends, the next one in its folder plays after a 5-second "Up next" countdown
+(Cancel or Play now; Autoplay can be turned off in Settings). Closing the app while a video is
+playing asks first.
+
 | Gesture (mouse drag or touch) | Action |
 |---|---|
 | Swipe the video left or right | Full screen, and back |

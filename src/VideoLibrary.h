@@ -115,6 +115,7 @@ public:
     Q_INVOKABLE QString nextInFolder(const QString &path) const;
     // The video before this one in its folder, or "" at the start.
     Q_INVOKABLE QString previousInFolder(const QString &path) const;
+    Q_INVOKABLE QUrl thumbnailFor(const QString &path) const;
     // Subtitle files that belong to a video, best match first: same name (ignoring case,
     // spaces and punctuation, plus an optional language tag like ".en"), the same
     // episode (S01E02, 1x02, "Season 1 Episode 2"), or any subtitle in a folder that

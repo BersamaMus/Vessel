@@ -618,6 +618,12 @@ QString VideoLibrary::nextInFolder(const QString &path) const
     return m_videos[index + 1].path;
 }
 
+QUrl VideoLibrary::thumbnailFor(const QString &path) const
+{
+    const int index = m_byPath.value(path, -1);
+    return index >= 0 ? thumbnailUrl(index) : QUrl();
+}
+
 QString VideoLibrary::previousInFolder(const QString &path) const
 {
     const int index = m_byPath.value(path, -1);
