@@ -529,6 +529,7 @@ QVariantMap VideoLibrary::detailsOf(const QString &path) const
     return {
         {"title", titleOf(path)},
         {"inLibrary", index >= 0},
+        {"external", index >= 0 && m_videos[index].external},
         {"folder", file.absolutePath()},
         {"folderLabel", index >= 0 ? locationOf(m_videos[index]) : QDir::toNativeSeparators(file.absolutePath())},
         {"fileName", file.fileName()},

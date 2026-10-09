@@ -462,7 +462,8 @@ Item {
                     Layout.bottomMargin: 6
                     Layout.leftMargin: 8
                     visible: watch.suggestions !== null && watch.suggestions.count > 0
-                    text: watch.queue !== null && watch.queue.count > 1 ? qsTr("More videos") : qsTr("Up next")
+                    text: watch.queue === null || watch.queue.count <= 1 ? qsTr("Up next")
+                        : watch.details.external ? qsTr("More videos from this drive") : qsTr("More videos")
                     color: Theme.textPrimary
                     font.pixelSize: 16
                     font.weight: Font.Bold
