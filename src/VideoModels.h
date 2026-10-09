@@ -55,7 +55,8 @@ private:
     QList<int> m_rows;   // indexes into the library
 };
 
-// Sub-folders of a library folder, each with a cover thumbnail.
+// Folders, each with a cover thumbnail: the sub-folders of a folder (for "",
+// the library folders themselves), or the top folders of every library folder.
 class FolderModel : public QAbstractListModel
 {
     Q_OBJECT
@@ -73,7 +74,9 @@ public:
         ThumbnailRole,
     };
 
-    FolderModel(VideoLibrary *library, const QString &parentFolder, QObject *parent = nullptr);
+    enum Mode { Children, TopFolders };
+
+    FolderModel(VideoLibrary *library, const QString &parentFolder, Mode mode, QObject *parent = nullptr);
 
     int rowCount(const QModelIndex &parent = {}) const override;
     QVariant data(const QModelIndex &index, int role) const override;
@@ -95,6 +98,7 @@ private:
 
     QPointer<VideoLibrary> m_library;
     QString m_parentFolder;
+    Mode m_mode = Children;
     QList<Entry> m_entries;
 };
 

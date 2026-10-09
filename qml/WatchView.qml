@@ -143,9 +143,8 @@ Item {
     }
 
     function openFolder() {
-        const folder = details.folder ?? "";
         minimize();
-        folder === "" ? app.showLibrary() : app.openFolder(folder);
+        app.openFolder(details.folder);
     }
 
     function scrollQueueToCurrent() {
@@ -220,6 +219,22 @@ Item {
                 watch.mode = "watch";
                 watch.animate(fullAnim, 0);
             }
+        }
+    }
+
+    // Unplugged mid-video: keep the place (the drive's videos are still known
+    // at this point), then stop instead of stalling on a missing file.
+    Connections {
+        target: VideoLibrary
+        function onDriveRemoved(drivePath) {
+            if (watch.mode === "closed" || !watch.path.startsWith(drivePath))
+                return;
+            watch.saveProgress();
+            watch.lastDuration = 0;   // saved; later saves would miss the drive's key
+            mpv.stop();
+            if (watch.app.isFullScreen)
+                watch.exitFull();
+            errorText.text = qsTr("The drive was removed. Plug it back in to carry on from here.");
         }
     }
 
