@@ -11,6 +11,7 @@
 #include <QFileInfo>
 #include <QFutureWatcher>
 #include <QJsonDocument>
+#include <QLocale>
 #include <QRandomGenerator>
 #include <QSaveFile>
 #include <QSet>
@@ -79,7 +80,8 @@ QList<VideoInfo> scanFolder(const QString &root)
 
 bool isFinished(double position, double duration)
 {
-    return duration > 0 && (position >= duration * 0.95 || duration - position < 15);
+    // 95% covers a film's end credits; short clips just need to reach the end.
+    return duration > 0 && (position >= duration * 0.95 || duration - position < 5);
 }
 
 } // namespace
@@ -284,6 +286,61 @@ QString VideoLibrary::titleOf(const QString &path) const
 {
     const int index = m_byPath.value(path, -1);
     return index >= 0 ? m_videos[index].title : prettyTitle(QFileInfo(path).completeBaseName());
+}
+
+QVariantMap VideoLibrary::detailsOf(const QString &path) const
+{
+    const QFileInfo file(path);
+    const int index = m_byPath.value(path, -1);
+    const QLocale locale = QLocale::system();
+    const QString folder = index >= 0 ? m_videos[index].folder : QString();
+    const QDateTime added = index >= 0 ? m_videos[index].added : file.birthTime();
+
+    return {
+        {"title", titleOf(path)},
+        {"inLibrary", index >= 0},
+        {"folder", folder},
+        {"folderLabel", index >= 0 ? folderLabel(folder, folderName(QString())) : file.absolutePath()},
+        {"fileName", file.fileName()},
+        {"sizeText", locale.formattedDataSize(file.size(), 1, QLocale::DataSizeTraditionalFormat)},
+        {"addedText", added.isValid() ? locale.toString(added.date(), QStringLiteral("d MMM yyyy")) : QString()},
+    };
+}
+
+QString VideoLibrary::folderOf(const QString &path) const
+{
+    const int index = m_byPath.value(path, -1);
+    return index >= 0 ? m_videos[index].folder : QString();
+}
+
+QString VideoLibrary::nextInFolder(const QString &path) const
+{
+    const int index = m_byPath.value(path, -1);
+    // Library order is natural path order, so the next one in the same folder follows directly.
+    if (index < 0 || index + 1 >= m_videos.size() || m_videos[index + 1].folder != m_videos[index].folder)
+        return {};
+    return m_videos[index + 1].path;
+}
+
+VideoModel *VideoLibrary::suggestionsFor(const QString &path)
+{
+    auto *model = new VideoModel(this, [this, path] {
+        const QString folder = folderOf(path);
+        QList<int> others;
+        QList<int> sameFolder;
+        for (int i = 0; i < m_videos.size(); ++i) {
+            if (m_videos[i].path == path)
+                continue;
+            (m_videos[i].folder == folder ? sameFolder : others).append(i);
+        }
+        std::shuffle(others.begin(), others.end(), *QRandomGenerator::global());
+        std::shuffle(sameFolder.begin(), sameFolder.end(), *QRandomGenerator::global());
+        others.append(sameFolder);
+        return others.mid(0, 12);
+    });
+    m_folderVideoModels.removeAll(nullptr);
+    m_folderVideoModels.append(model);
+    return model;   // owned by QML (no parent)
 }
 
 double VideoLibrary::resumePosition(const QString &path) const

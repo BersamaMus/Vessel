@@ -28,7 +28,19 @@ cmake --build --preset debug
 The post-build step copies `libmpv-2.dll` and runs `windeployqt`, so the build folder runs as-is.
 You can also open the folder directly in Visual Studio or Qt Creator. Both pick up `CMakePresets.json`.
 
-## Controls
+## The player
+
+Playing a video opens the **watch page**: the video, its details below, and on the right the
+rest of its folder (as a playlist) followed by more videos. The same video can shrink into a
+**mini player** in the corner, so you can keep browsing while it plays, or go **full screen**.
+
+| Gesture (mouse drag or touch) | Action |
+|---|---|
+| Swipe the video left or right | Full screen, and back |
+| Swipe the video down | Mini player (it follows your finger) |
+| Swipe the mini player up, or click it | Back to the watch page |
+| Swipe the mini player down or sideways | Close it |
+| Click / double-click the video | Play-pause / full screen |
 
 | Key | Action |
 |---|---|
@@ -37,9 +49,11 @@ You can also open the folder directly in Visual Studio or Qt Creator. Both pick 
 | J / L | Seek -10s / +10s |
 | ↑ / ↓ | Volume ±5 |
 | M | Mute |
-| F / double-click | Fullscreen |
-| Esc | Leave fullscreen, or go back to the library |
-| Ctrl+O | Open file (drag & drop also works) |
+| F | Full screen |
+| I | Mini player, and back |
+| Shift+N | Next video in the folder |
+| Esc | Leave full screen, or shrink to the mini player |
+| Ctrl+O | Open a file (drag & drop also works) |
 
 ## The library
 
@@ -64,7 +78,7 @@ Delete `metadata.json` and `thumbnails\` to rebuild the thumbnails.
   - `VideoLibrary` (QML singleton): scanning, the metadata cache, watch history, and the models.
   - `VideoModel` / `FolderModel`: list models for shelves, folder pages and folder cards.
   - `Thumbnailer`: a two-thread pool of headless libmpv instances (`vo=image`).
-- **QML** (`qml/`): `Main` (window, navigation), `HomePage`, `FolderPage`, `PlayerPage`, and
+- **QML** (`qml/`): `Main` (window, navigation), `HomePage`, `FolderPage`, `WatchView` (the player layer), and
   components (`Shelf`, `VideoCard`, `FolderCard`, `PickRow`, `NavRail`, ...). Colours and radii
   live in `Theme.qml`. Icons are Material Icons (Apache 2.0) path data in `Icons.js`, drawn with
   `QtQuick.Shapes` so they take any colour.

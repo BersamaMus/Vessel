@@ -39,6 +39,7 @@ public:
     QHash<int, QByteArray> roleNames() const override;
 
     Q_INVOKABLE QString pathAt(int row) const;
+    Q_INVOKABLE int indexOf(const QString &path) const;
 
     // Re-reads the list from the library.
     void refresh();
@@ -98,3 +99,5 @@ private:
 };
 
 QString formatDuration(double seconds);
+// "Season 2 · House MD…" for a folder relative to the library root.
+QString folderLabel(const QString &folder, const QString &rootName);

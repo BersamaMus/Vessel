@@ -66,6 +66,13 @@ public:
     Q_INVOKABLE int videoCountIn(const QString &folder) const;
 
     Q_INVOKABLE QString titleOf(const QString &path) const;
+    // For the watch page: title, folder, folderLabel, fileName, sizeText, addedText.
+    Q_INVOKABLE QVariantMap detailsOf(const QString &path) const;
+    Q_INVOKABLE QString folderOf(const QString &path) const;
+    // The video after this one in its folder, or "" at the end.
+    Q_INVOKABLE QString nextInFolder(const QString &path) const;
+    // A random selection of other videos, preferring other folders.
+    Q_INVOKABLE VideoModel *suggestionsFor(const QString &path);
     Q_INVOKABLE double resumePosition(const QString &path) const;
     Q_INVOKABLE void saveProgress(const QString &path, double position, double duration);
     Q_INVOKABLE QString localPath(const QUrl &url) const { return url.toLocalFile(); }
