@@ -101,6 +101,9 @@ public:
     // Models for browsing one folder.
     Q_INVOKABLE VideoModel *videosIn(const QString &folder);
     Q_INVOKABLE FolderModel *foldersIn(const QString &folder);
+    // Started, unfinished videos on one drive, most recently watched first.
+    Q_INVOKABLE VideoModel *continueWatchingOn(const QString &drivePath);
+    Q_INVOKABLE bool isDrive(const QString &folder) const;
     Q_INVOKABLE QString folderName(const QString &folder) const;
     Q_INVOKABLE int videoCountIn(const QString &folder) const;
 
@@ -145,6 +148,9 @@ private:
     void onThumbnailFinished(const QString &path, bool ok, double duration);
     void queueThumbnails();
     void refreshModels();
+    void refreshContinueWatching();
+    // Started, unfinished videos on a drive, or in the library for "".
+    QList<int> startedIn(const QString &drivePath) const;
     int sourceIndex(const QString &path) const;
     QString sourceName(const QString &path) const;
     QString keyFor(const QString &path) const;
@@ -175,5 +181,6 @@ private:
     VideoModel *m_quickPicks = nullptr;
     FolderModel *m_folders = nullptr;
     QList<QPointer<VideoModel>> m_folderVideoModels;
+    QList<QPointer<VideoModel>> m_driveContinueModels;   // also refreshed as progress is saved
     QList<QPointer<FolderModel>> m_folderModels;
 };

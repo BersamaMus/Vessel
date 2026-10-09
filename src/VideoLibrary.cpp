@@ -126,18 +126,7 @@ VideoLibrary::VideoLibrary(QObject *parent)
     }
 
     // Home's shelves are about the library, not whatever drive is plugged in.
-    m_continueWatching = new VideoModel(this, [this] {
-        QList<int> rows;
-        for (int i = 0; i < m_videos.size(); ++i) {
-            const VideoInfo &v = m_videos[i];
-            if (!v.external && v.watchedAt > 0 && !v.finished && v.position >= kMinProgress)
-                rows.append(i);
-        }
-        std::sort(rows.begin(), rows.end(), [this](int a, int b) {
-            return m_videos[a].watchedAt > m_videos[b].watchedAt;
-        });
-        return rows.mid(0, kShelfSize);
-    }, this);
+    m_continueWatching = new VideoModel(this, [this] { return startedIn(QString()); }, this);
 
     m_recentlyAdded = new VideoModel(this, [this] {
         QList<int> rows;
@@ -443,9 +432,17 @@ void VideoLibrary::onThumbnailFinished(const QString &path, bool ok, double dura
     emit videoChanged(index);
 }
 
-void VideoLibrary::refreshModels()
+void VideoLibrary::refreshContinueWatching()
 {
     m_continueWatching->refresh();
+    for (const auto &model : std::as_const(m_driveContinueModels))
+        if (model)
+            model->refresh();
+}
+
+void VideoLibrary::refreshModels()
+{
+    refreshContinueWatching();
     m_recentlyAdded->refresh();
     m_quickPicks->refresh();
     m_folders->refresh();
@@ -469,6 +466,35 @@ VideoModel *VideoLibrary::videosIn(const QString &folder)
     m_folderVideoModels.removeAll(nullptr);
     m_folderVideoModels.append(model);
     return model;   // owned by QML (no parent)
+}
+
+QList<int> VideoLibrary::startedIn(const QString &drivePath) const
+{
+    QList<int> rows;
+    for (int i = 0; i < m_videos.size(); ++i) {
+        const VideoInfo &v = m_videos[i];
+        const bool here = drivePath.isEmpty() ? !v.external : v.external && v.root == drivePath;
+        if (here && v.watchedAt > 0 && !v.finished && v.position >= kMinProgress)
+            rows.append(i);
+    }
+    std::sort(rows.begin(), rows.end(), [this](int a, int b) {
+        return m_videos[a].watchedAt > m_videos[b].watchedAt;
+    });
+    return rows.mid(0, kShelfSize);
+}
+
+VideoModel *VideoLibrary::continueWatchingOn(const QString &drivePath)
+{
+    auto *model = new VideoModel(this, [this, drivePath] { return startedIn(drivePath); });
+    m_driveContinueModels.removeAll(nullptr);
+    m_driveContinueModels.append(model);
+    return model;   // owned by QML (no parent)
+}
+
+bool VideoLibrary::isDrive(const QString &folder) const
+{
+    const int index = sourceIndex(folder);
+    return index >= 0 && m_sources[index].external;
 }
 
 FolderModel *VideoLibrary::foldersIn(const QString &folder)
@@ -614,7 +640,7 @@ void VideoLibrary::saveProgress(const QString &path, double position, double dur
     if (v.duration <= 0)
         v.duration = duration;
     emit videoChanged(index);
-    m_continueWatching->refresh();
+    refreshContinueWatching();
 }
 
 QUrl VideoLibrary::thumbnailUrl(int index) const
