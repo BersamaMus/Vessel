@@ -14,6 +14,8 @@ ScrollView {
     readonly property var app: ApplicationWindow.window
     readonly property var subfolders: VideoLibrary.foldersIn(folder)
     readonly property var videos: VideoLibrary.videosIn(folder)
+    // A drive's own page leads with what was being watched on it (drive videos stay off Home).
+    readonly property var started: VideoLibrary.isDrive(folder) ? VideoLibrary.continueWatchingOn(folder) : null
     readonly property int columns: Math.max(1, Math.floor((availableWidth - 2 * Theme.pagePadding + gap) / (220 + gap)))
     readonly property real gap: 16
     readonly property real cardWidth: Math.floor((availableWidth - 2 * Theme.pagePadding - (columns - 1) * gap) / columns)
@@ -78,6 +80,30 @@ ScrollView {
             iconName: "folder"
             text: page.isLibraryTab ? qsTr("No videos in your library yet. Add folders in Settings.")
                                     : qsTr("No videos in this folder.")
+        }
+
+        SectionLabel {
+            visible: page.started !== null && page.started.count > 0
+            text: qsTr("Continue watching")
+        }
+
+        Shelf {
+            Layout.fillWidth: true
+            visible: page.started !== null && page.started.count > 0
+            model: page.started
+            cellWidth: 276
+            cellHeight: Math.round(260 * 9 / 16) + 62
+            arrowCenterY: 260 * 9 / 32
+            delegate: VideoCard {
+                required property var model
+                width: 260
+                title: model.title
+                subtitle: model.remainingText
+                thumbnail: model.thumbnail
+                durationText: model.durationText
+                progress: model.progress
+                onClicked: page.app.play(model.path)
+            }
         }
 
         SectionLabel {
