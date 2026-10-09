@@ -64,6 +64,13 @@ public:
         if (m_ctx)
             mpv_render_context_free(m_ctx);
         mpv_destroy(m_client);
+
+        // The item can live on (e.g. hidden and shown again); files must then
+        // wait for the next renderer.
+        QMetaObject::invokeMethod(qApp, [item = m_item] {
+            if (item)
+                item->onRendererGone();
+        }, Qt::QueuedConnection);
     }
 
     void render() override
@@ -113,6 +120,9 @@ MpvItem::MpvItem(QQuickItem *parent)
     mpv_observe_property(m_mpv, 0, "volume", MPV_FORMAT_DOUBLE);
     mpv_observe_property(m_mpv, 0, "mute", MPV_FORMAT_FLAG);
     mpv_observe_property(m_mpv, 0, "media-title", MPV_FORMAT_STRING);
+    mpv_observe_property(m_mpv, 0, "width", MPV_FORMAT_INT64);
+    mpv_observe_property(m_mpv, 0, "height", MPV_FORMAT_INT64);
+    mpv_observe_property(m_mpv, 0, "video-format", MPV_FORMAT_STRING);
 
     mpv_set_wakeup_callback(m_mpv, [](void *ctx) {
         QMetaObject::invokeMethod(static_cast<MpvItem *>(ctx), &MpvItem::processEvents,
@@ -170,6 +180,13 @@ void MpvItem::processEvents()
             } else if (name == "media-title") {
                 m_title = has ? QString::fromUtf8(*static_cast<char **>(prop->data)) : QString();
                 emit titleChanged();
+            } else if (name == "width" || name == "height") {
+                const int value = has ? int(*static_cast<int64_t *>(prop->data)) : 0;
+                (name == "width" ? m_videoWidth : m_videoHeight) = value;
+                emit videoInfoChanged();
+            } else if (name == "video-format") {
+                m_videoFormat = has ? QString::fromUtf8(*static_cast<char **>(prop->data)) : QString();
+                emit videoInfoChanged();
             }
             break;
         }
@@ -228,8 +245,27 @@ void MpvItem::onRendererReady()
         load(std::exchange(m_pendingPath, QString()), m_pendingStart);
 }
 
+void MpvItem::onRendererGone()
+{
+    m_rendererReady = false;
+}
+
+void MpvItem::stop()
+{
+    m_pendingPath.clear();
+    command({"stop"});
+    if (m_loaded) {
+        m_loaded = false;
+        emit loadedChanged();
+    }
+}
+
 void MpvItem::load(const QString &path, double startSeconds)
 {
+    if (m_loaded) {
+        m_loaded = false;
+        emit loadedChanged();
+    }
     // "start" is an option that sticks to later files, so always set it.
     const QByteArray start = startSeconds > 0 ? QByteArray::number(startSeconds, 'f', 3) : QByteArray("none");
     mpv_set_option_string(m_mpv, "start", start.constData());

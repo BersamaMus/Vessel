@@ -20,6 +20,9 @@ class MpvItem : public QQuickFramebufferObject
     Q_PROPERTY(bool muted READ muted WRITE setMuted NOTIFY mutedChanged)
     Q_PROPERTY(QString title READ title NOTIFY titleChanged)
     Q_PROPERTY(bool loaded READ loaded NOTIFY loadedChanged)
+    Q_PROPERTY(int videoWidth READ videoWidth NOTIFY videoInfoChanged)
+    Q_PROPERTY(int videoHeight READ videoHeight NOTIFY videoInfoChanged)
+    Q_PROPERTY(QString videoFormat READ videoFormat NOTIFY videoInfoChanged)
 
 public:
     explicit MpvItem(QQuickItem *parent = nullptr);
@@ -35,6 +38,9 @@ public:
     bool muted() const { return m_muted; }
     QString title() const { return m_title; }
     bool loaded() const { return m_loaded; }
+    int videoWidth() const { return m_videoWidth; }
+    int videoHeight() const { return m_videoHeight; }
+    QString videoFormat() const { return m_videoFormat; }
 
     void setPaused(bool paused);
     void setVolume(double volume);
@@ -48,6 +54,8 @@ public:
     // Fast keyframe seek, for while the seek bar is being dragged.
     Q_INVOKABLE void scrub(double seconds);
     Q_INVOKABLE void seekRelative(double seconds);
+    // Stops playback and unloads the file.
+    Q_INVOKABLE void stop();
 
 signals:
     void positionChanged();
@@ -58,6 +66,7 @@ signals:
     void mutedChanged();
     void titleChanged();
     void loadedChanged();
+    void videoInfoChanged();
     void errorOccurred(const QString &message);
 
 private:
@@ -66,6 +75,7 @@ private:
     void processEvents();
     void command(const QStringList &args);
     void onRendererReady();
+    void onRendererGone();
     void load(const QString &path, double startSeconds);
 
     mpv_handle *m_mpv = nullptr;
@@ -82,4 +92,7 @@ private:
     bool m_muted = false;
     QString m_title;
     bool m_loaded = false;
+    int m_videoWidth = 0;
+    int m_videoHeight = 0;
+    QString m_videoFormat;
 };

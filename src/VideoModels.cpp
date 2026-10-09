@@ -18,6 +18,8 @@ QString remainingText(double position, double duration)
     return QObject::tr("%1 h %2 min left").arg(minutes / 60).arg(minutes % 60);
 }
 
+} // namespace
+
 QString folderLabel(const QString &folder, const QString &rootName)
 {
     if (folder.isEmpty())
@@ -26,8 +28,6 @@ QString folderLabel(const QString &folder, const QString &rootName)
     const QStringList parts = folder.split(QLatin1Char('/'));
     return parts.size() == 1 ? parts.first() : parts.last() + QStringLiteral(" · ") + parts.first();
 }
-
-} // namespace
 
 QString formatDuration(double seconds)
 {
@@ -131,6 +131,14 @@ QString VideoModel::pathAt(int row) const
     if (!m_library || row < 0 || row >= m_rows.size())
         return {};
     return m_library->video(m_rows[row]).path;
+}
+
+int VideoModel::indexOf(const QString &path) const
+{
+    for (int row = 0; row < m_rows.size(); ++row)
+        if (m_library && m_library->video(m_rows[row]).path == path)
+            return row;
+    return -1;
 }
 
 // ---------------------------------------------------------------------------

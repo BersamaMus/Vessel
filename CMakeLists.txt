@@ -77,7 +77,7 @@ set(QML_FILES
     qml/NavRail.qml
     qml/HomePage.qml
     qml/FolderPage.qml
-    qml/PlayerPage.qml
+    qml/WatchView.qml
 )
 set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 # Serve the files from the module root so they see each other without imports.
