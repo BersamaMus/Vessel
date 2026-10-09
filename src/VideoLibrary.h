@@ -113,6 +113,10 @@ public:
     Q_INVOKABLE QString folderOf(const QString &path) const;
     // The video after this one in its folder, or "" at the end.
     Q_INVOKABLE QString nextInFolder(const QString &path) const;
+    // The video before this one in its folder, or "" at the start.
+    Q_INVOKABLE QString previousInFolder(const QString &path) const;
+    // Opens the file's folder in the system file manager, with the file selected where possible.
+    Q_INVOKABLE void showInFileManager(const QString &path) const;
     // A random selection of videos from other folders: on the same drive for a
     // drive's video, otherwise from the library.
     Q_INVOKABLE VideoModel *suggestionsFor(const QString &path);
