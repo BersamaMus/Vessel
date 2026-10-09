@@ -23,6 +23,12 @@
 #include <algorithm>
 #include <numeric>
 
+#ifdef Q_OS_WIN
+#include <shlobj.h>
+#else
+#include <QDesktopServices>
+#endif
+
 namespace {
 
 constexpr int kShelfSize = 20;
@@ -577,6 +583,31 @@ QString VideoLibrary::nextInFolder(const QString &path) const
     if (index < 0 || index + 1 >= m_videos.size() || m_videos[index + 1].dir != m_videos[index].dir)
         return {};
     return m_videos[index + 1].path;
+}
+
+QString VideoLibrary::previousInFolder(const QString &path) const
+{
+    const int index = m_byPath.value(path, -1);
+    if (index <= 0 || m_videos[index - 1].dir != m_videos[index].dir)
+        return {};
+    return m_videos[index - 1].path;
+}
+
+void VideoLibrary::showInFileManager(const QString &path) const
+{
+#ifdef Q_OS_WIN
+    // Explorer's own "open folder and select" call; copes with any characters in the path.
+    const std::wstring native = QDir::toNativeSeparators(path).toStdWString();
+    const HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    if (PIDLIST_ABSOLUTE item = ILCreateFromPathW(native.c_str())) {
+        SHOpenFolderAndSelectItems(item, 0, nullptr, 0);
+        ILFree(item);
+    }
+    if (SUCCEEDED(init))
+        CoUninitialize();
+#else
+    QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
+#endif
 }
 
 VideoModel *VideoLibrary::suggestionsFor(const QString &path)

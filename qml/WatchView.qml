@@ -26,6 +26,10 @@ Item {
     readonly property var details: path !== "" && VideoLibrary.count >= 0 ? VideoLibrary.detailsOf(path) : ({})
     readonly property string title: details.title ?? ""
     readonly property string nextPath: path !== "" && VideoLibrary.count >= 0 ? VideoLibrary.nextInFolder(path) : ""
+    readonly property string previousPath: path !== "" && VideoLibrary.count >= 0 ? VideoLibrary.previousInFolder(path) : ""
+    // The double-tap skip in progress: which side, and how far so far.
+    property int seekSide: 0
+    property int seekTotal: 0
     // Rebuilt when the library finishes scanning (a file can be opened before that).
     readonly property var queue: path !== "" && VideoLibrary.count >= 0 ? VideoLibrary.videosIn(VideoLibrary.folderOf(path)) : null
     readonly property var suggestions: path !== "" && VideoLibrary.count >= 0 ? VideoLibrary.suggestionsFor(path) : null
@@ -76,6 +80,25 @@ Item {
     function playNext() {
         if (nextPath)
             open(nextPath);
+    }
+
+    function playPrevious() {
+        if (previousPath)
+            open(previousPath);
+    }
+
+    // -1 for the left third of the video, 1 for the right third, 0 for the middle.
+    function sideAt(x) {
+        return x < frame.width / 3 ? -1 : x > frame.width * 2 / 3 ? 1 : 0;
+    }
+
+    function tapSeek(side) {
+        if (side !== seekSide)
+            seekTotal = 0;
+        seekSide = side;
+        seekTotal += 10;
+        mpv.seekRelative(side * 10);
+        seekBurst.restart();
     }
 
     function minimize() {
@@ -199,6 +222,27 @@ Item {
         onTriggered: {
             if (!mpv.paused && !seekBar.pressed && !controlsHover.hovered)
                 watch.controlsShown = false;
+        }
+    }
+
+    // The mouse left the video: hide the controls almost at once.
+    Timer {
+        id: leaveTimer
+        interval: 300
+        onTriggered: {
+            if (!mpv.paused && !seekBar.pressed)
+                watch.controlsShown = false;
+        }
+    }
+
+    // Double-tap seeking, as on YouTube: double-tap a side to skip 10 seconds,
+    // and keep tapping there to skip more.
+    Timer {
+        id: seekBurst
+        interval: 700
+        onTriggered: {
+            watch.seekSide = 0;
+            watch.seekTotal = 0;
         }
     }
 
@@ -382,6 +426,46 @@ Item {
                         color: Theme.textSecondary
                         font.pixelSize: 13
                     }
+
+                    // Opens the folder with this file selected.
+                    AbstractButton {
+                        id: locationLink
+                        width: parent.width
+                        topPadding: 4
+                        hoverEnabled: true
+                        focusPolicy: Qt.NoFocus
+                        visible: watch.path !== ""
+                        onClicked: VideoLibrary.showInFileManager(watch.path)
+
+                        ToolTip.visible: hovered
+                        ToolTip.delay: 600
+                        ToolTip.text: Qt.platform.os === "windows" ? qsTr("Show in File Explorer") : qsTr("Show in folder")
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+
+                        background: null
+                        contentItem: RowLayout {
+                            spacing: 6
+                            Icon {
+                                name: "folder_open"
+                                size: 16
+                                color: Theme.accent
+                            }
+                            Text {
+                                text: qsTr("File location:")
+                                color: Theme.textSecondary
+                                font.pixelSize: 13
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: Qt.platform.os === "windows" ? (watch.details.folder ?? "").replace(/\//g, "\\")
+                                                                   : (watch.details.folder ?? "")
+                                color: Theme.accent
+                                font.pixelSize: 13
+                                font.underline: locationLink.hovered
+                                elide: Text.ElideMiddle
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -553,13 +637,31 @@ Item {
         Item {
             anchors.fill: parent
 
+            // Click: pause. Double-click the middle: full screen. Double-click a side: skip 10 seconds.
             TapHandler {
-                onTapped: watch.mode === "mini" ? watch.expand() : clickTimer.restart()
-                onDoubleTapped: {
+                onTapped: eventPoint => {
+                    if (watch.mode === "mini") {
+                        watch.expand();
+                        return;
+                    }
+                    // More taps on the same side, right after a double-tap, keep skipping.
+                    const side = watch.sideAt(eventPoint.position.x);
+                    if (seekBurst.running && side !== 0 && side === watch.seekSide) {
+                        clickTimer.stop();
+                        watch.tapSeek(side);
+                        return;
+                    }
+                    clickTimer.restart();
+                }
+                onDoubleTapped: eventPoint => {
                     if (watch.mode === "mini")
                         return;
                     clickTimer.stop();
-                    watch.toggleFull();
+                    const side = watch.sideAt(eventPoint.position.x);
+                    if (side === 0)
+                        watch.toggleFull();
+                    else if (!seekBurst.running)   // otherwise the tap already skipped
+                        watch.tapSeek(side);
                 }
             }
 
@@ -600,7 +702,50 @@ Item {
             id: frameHover
             cursorShape: watch.mode !== "mini" && !watch.controlsShown ? Qt.BlankCursor : Qt.ArrowCursor
             onPointChanged: watch.wake()
+            onHoveredChanged: hovered ? leaveTimer.stop() : leaveTimer.restart()
         }
+
+        // The "10 seconds" bubbles for double-tap seeking: a circle's edge
+        // coming in from the side, with the running total.
+        component SeekBubble: Item {
+            id: bubble
+            property int side: -1
+            readonly property real diameter: frame.height * 1.6
+
+            anchors.fill: parent
+            opacity: watch.seekSide === side ? 1 : 0
+            visible: opacity > 0
+            Behavior on opacity { NumberAnimation { duration: 150 } }
+
+            Rectangle {
+                width: bubble.diameter
+                height: bubble.diameter
+                radius: bubble.diameter / 2
+                x: bubble.side < 0 ? frame.width * 0.36 - bubble.diameter : frame.width * 0.64
+                y: (frame.height - bubble.diameter) / 2
+                color: "#26FFFFFF"
+            }
+            Column {
+                x: (bubble.side < 0 ? frame.width * 0.18 : frame.width * 0.82) - width / 2
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 4
+                Icon {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    name: bubble.side < 0 ? "rewind" : "forward"
+                    size: 32
+                }
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: qsTr("%1 seconds").arg(watch.seekTotal)
+                    color: Theme.textPrimary
+                    font.pixelSize: 14
+                    font.weight: Font.DemiBold
+                }
+            }
+        }
+
+        SeekBubble { side: -1 }
+        SeekBubble { side: 1 }
 
         // --- Watch page / full screen controls ---------------------------------
         Item {
@@ -650,12 +795,13 @@ Item {
 
                 IconButton {
                     anchors.verticalCenter: parent.verticalCenter
-                    iconName: "rewind"
-                    iconSize: 28
+                    iconName: "skip_previous"
+                    iconSize: 30
                     width: 48
                     height: 48
-                    tip: qsTr("Back 10 seconds (J)")
-                    onClicked: mpv.seekRelative(-10)
+                    enabled: watch.previousPath !== ""
+                    tip: qsTr("Previous video (Shift+P)")
+                    onClicked: watch.playPrevious()
                 }
 
                 AbstractButton {
@@ -685,12 +831,13 @@ Item {
 
                 IconButton {
                     anchors.verticalCenter: parent.verticalCenter
-                    iconName: "forward"
-                    iconSize: 28
+                    iconName: "skip_next"
+                    iconSize: 30
                     width: 48
                     height: 48
-                    tip: qsTr("Forward 10 seconds (L)")
-                    onClicked: mpv.seekRelative(10)
+                    enabled: watch.nextPath !== ""
+                    tip: qsTr("Next video (Shift+N)")
+                    onClicked: watch.playNext()
                 }
             }
 
@@ -730,12 +877,6 @@ Item {
                             font.features: { "tnum": 1 }
                         }
                         Item { Layout.fillWidth: true }
-                        IconButton {
-                            visible: watch.nextPath !== ""
-                            iconName: "skip_next"
-                            tip: qsTr("Next (Shift+N)")
-                            onClicked: watch.playNext()
-                        }
                         IconButton {
                             iconName: mpv.muted || mpv.volume === 0 ? "volume_off" : "volume"
                             tip: qsTr("Mute (M)")
@@ -846,6 +987,7 @@ Item {
     Key { sequence: "F"; onActivated: watch.toggleFull() }
     Key { sequence: "I"; onActivated: watch.minimize() }
     Key { sequence: "Shift+N"; onActivated: watch.playNext() }
+    Key { sequence: "Shift+P"; onActivated: watch.playPrevious() }
     Key { sequence: "Esc"; onActivated: watch.mode === "full" ? watch.exitFull() : watch.minimize() }
     Shortcut {
         // In the mini player, I brings the watch page back.

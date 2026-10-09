@@ -40,18 +40,20 @@ rest of its folder (as a playlist) followed by more videos. The same video can s
 | Swipe the video down | Mini player (it follows your finger) |
 | Swipe the mini player up, or click it | Back to the watch page |
 | Swipe the mini player down or sideways | Close it |
-| Click / double-click the video | Play-pause / full screen |
+| Click the video | Play / pause |
+| Double-click the middle of the video | Full screen |
+| Double-click the left or right side | Back or forward 10s (keep tapping to skip more) |
 
 | Key | Action |
 |---|---|
 | Space / K | Play / pause |
 | ← / → | Seek -5s / +5s |
 | J / L | Seek -10s / +10s |
+| Shift+P / Shift+N | Previous / next video in the folder |
 | ↑ / ↓ | Volume ±5 |
 | M | Mute |
 | F | Full screen |
 | I | Mini player, and back |
-| Shift+N | Next video in the folder |
 | Esc | Leave full screen, or shrink to the mini player |
 | Ctrl+O | Open a file (drag & drop also works) |
 
