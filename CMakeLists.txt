@@ -5,8 +5,8 @@ project(BetterVideoPlayer VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets OpenGLWidgets)
-qt_standard_project_setup()
+find_package(Qt6 6.8 REQUIRED COMPONENTS Concurrent OpenGL Quick)
+qt_standard_project_setup(REQUIRES 6.8)
 
 # ---------------------------------------------------------------------------
 # libmpv
@@ -54,15 +54,50 @@ endif()
 # ---------------------------------------------------------------------------
 # Application
 # ---------------------------------------------------------------------------
-qt_add_executable(BetterVideoPlayer
-    src/main.cpp
-    src/MainWindow.cpp
-    src/MainWindow.h
-    src/MpvWidget.cpp
-    src/MpvWidget.h
+qt_add_executable(BetterVideoPlayer src/main.cpp)
+
+set(QML_FILES
+    qml/Main.qml
+    qml/Theme.qml
+    qml/Icons.js
+    qml/Icon.qml
+    qml/IconButton.qml
+    qml/TextAction.qml
+    qml/AppLogo.qml
+    qml/AppMenu.qml
+    qml/AppMenuItem.qml
+    qml/AppSlider.qml
+    qml/RoundedImage.qml
+    qml/EmptyNote.qml
+    qml/VideoCard.qml
+    qml/FolderCard.qml
+    qml/PickRow.qml
+    qml/Shelf.qml
+    qml/ShelfHeader.qml
+    qml/NavRail.qml
+    qml/HomePage.qml
+    qml/FolderPage.qml
+    qml/PlayerPage.qml
+)
+set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+# Serve the files from the module root so they see each other without imports.
+foreach(file IN LISTS QML_FILES)
+    get_filename_component(name "${file}" NAME)
+    set_source_files_properties("${file}" PROPERTIES QT_RESOURCE_ALIAS "${name}")
+endforeach()
+
+qt_add_qml_module(BetterVideoPlayer
+    URI BetterVideoPlayer
+    QML_FILES ${QML_FILES}
+    SOURCES
+        src/MpvItem.cpp src/MpvItem.h
+        src/Thumbnailer.cpp src/Thumbnailer.h
+        src/VideoLibrary.cpp src/VideoLibrary.h
+        src/VideoModels.cpp src/VideoModels.h
 )
 
-target_link_libraries(BetterVideoPlayer PRIVATE Qt6::Widgets Qt6::OpenGLWidgets mpv::mpv)
+target_include_directories(BetterVideoPlayer PRIVATE src)
+target_link_libraries(BetterVideoPlayer PRIVATE Qt6::Concurrent Qt6::OpenGL Qt6::Quick mpv::mpv)
 target_compile_definitions(BetterVideoPlayer PRIVATE PROJECT_VERSION="${PROJECT_VERSION}")
 
 set_target_properties(BetterVideoPlayer PROPERTIES
@@ -75,6 +110,6 @@ if(WIN32)
     add_custom_command(TARGET BetterVideoPlayer POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MPV_DLL}" "$<TARGET_FILE_DIR:BetterVideoPlayer>"
         COMMAND "${WINDEPLOYQT_EXE}" --no-translations --no-opengl-sw --no-compiler-runtime
-                --verbose 0 "$<TARGET_FILE:BetterVideoPlayer>"
+                --qmldir "${CMAKE_CURRENT_SOURCE_DIR}/qml" --verbose 0 "$<TARGET_FILE:BetterVideoPlayer>"
         VERBATIM)
 endif()
