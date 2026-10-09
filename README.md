@@ -1,13 +1,14 @@
 # Better Video Player
 
-Offline desktop video player built with C++20, Qt 6 (Widgets) and libmpv
-(which bundles FFmpeg for demuxing/decoding).
+Offline video player built with C++20, Qt 6 (Qt Quick/QML) and libmpv
+(which bundles FFmpeg for demuxing/decoding). The look follows Blimp: black
+surfaces with a yellow accent.
 
 ## Dependencies (Windows)
 
 | Dependency | Location | Source |
 |---|---|---|
-| Qt 6.11.3, MSVC 64-bit | `C:\Qt\6.11.3\msvc2022_64` | qtbase + qtsvg archives from download.qt.io |
+| Qt 6.11.3, MSVC 64-bit | `C:\Qt\6.11.3\msvc2022_64` | qtbase, qtsvg and qtdeclarative archives from download.qt.io |
 | libmpv dev package | `third_party/mpv/` (`include/`, `libmpv-2.dll`) | [shinchiro/mpv-winbuild-cmake](https://github.com/shinchiro/mpv-winbuild-cmake/releases) `mpv-dev-x86_64-*.7z` |
 | MSVC + CMake + Ninja | Visual Studio 2026 Community | |
 
@@ -37,13 +38,33 @@ You can also open the folder directly in Visual Studio or Qt Creator. Both pick 
 | ↑ / ↓ | Volume ±5 |
 | M | Mute |
 | F / double-click | Fullscreen |
-| Esc | Leave fullscreen |
+| Esc | Leave fullscreen, or go back to the library |
 | Ctrl+O | Open file (drag & drop also works) |
+
+## The library
+
+The app scans your Videos folder in the background (empty files, such as unfinished
+downloads, are skipped). For each video, a headless libmpv instance grabs a frame 20% in
+and reads the duration. Both are cached, so later launches are instant.
+
+App data lives in `%LOCALAPPDATA%\BetterVideoPlayer`:
+
+- `thumbnails\`: JPEG thumbnails, named by a hash of path, size and modified time
+- `metadata.json`: durations, and which files could not be thumbnailed
+- `history.json`: how far each video was watched (for Continue watching and resume)
+- `settings.ini`: the volume
+
+Delete `metadata.json` and `thumbnails\` to rebuild the thumbnails.
 
 ## Architecture
 
-- `MpvWidget`: a `QOpenGLWidget` that owns the `mpv_handle` and renders through
-  mpv's render API (`mpv_render_context`). mpv events and property changes
-  (`time-pos`, `duration`, `pause`, `volume`, `mute`, `media-title`) are re-emitted as Qt signals.
-- `MainWindow`: UI controls, shortcuts, drag & drop and fullscreen. It talks to the player only
-  through `MpvWidget`'s methods and signals.
+- **C++** (`src/`), registered as the `BetterVideoPlayer` QML module:
+  - `MpvItem`: a QML video item (`QQuickFramebufferObject`) that owns an mpv instance and
+    draws through mpv's OpenGL render API. Qt Quick is forced onto OpenGL in `main.cpp`.
+  - `VideoLibrary` (QML singleton): scanning, the metadata cache, watch history, and the models.
+  - `VideoModel` / `FolderModel`: list models for shelves, folder pages and folder cards.
+  - `Thumbnailer`: a two-thread pool of headless libmpv instances (`vo=image`).
+- **QML** (`qml/`): `Main` (window, navigation), `HomePage`, `FolderPage`, `PlayerPage`, and
+  components (`Shelf`, `VideoCard`, `FolderCard`, `PickRow`, `NavRail`, ...). Colours and radii
+  live in `Theme.qml`. Icons are Material Icons (Apache 2.0) path data in `Icons.js`, drawn with
+  `QtQuick.Shapes` so they take any colour.
