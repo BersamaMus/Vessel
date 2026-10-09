@@ -206,6 +206,71 @@ ScrollView {
             }
         }
 
+        // Autoplay on / off.
+        AbstractButton {
+            id: autoplayRow
+
+            readonly property bool on: ApplicationWindow.window.autoplay
+
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.pagePadding
+            Layout.rightMargin: Theme.pagePadding
+            Layout.topMargin: 20
+            hoverEnabled: true
+            focusPolicy: Qt.NoFocus
+            padding: 14
+            onClicked: ApplicationWindow.window.autoplay = !on
+
+            HoverHandler { cursorShape: Qt.PointingHandCursor }
+
+            background: Rectangle {
+                radius: Theme.radiusCard
+                color: autoplayRow.hovered ? Theme.surfaceHigh : Theme.surface
+                border.color: "#1FFFFFFF"
+            }
+
+            contentItem: RowLayout {
+                spacing: 14
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Text {
+                        text: qsTr("Autoplay")
+                        color: Theme.textPrimary
+                        font.pixelSize: 15
+                        font.weight: Font.DemiBold
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: qsTr("When a video ends, play the next one in its folder after a short countdown.")
+                        color: Theme.textSecondary
+                        font.pixelSize: 13
+                        wrapMode: Text.Wrap
+                    }
+                }
+
+                // The switch.
+                Rectangle {
+                    implicitWidth: 44
+                    implicitHeight: 24
+                    radius: 12
+                    color: autoplayRow.on ? Theme.accent : "#3A3A3A"
+                    Behavior on color { ColorAnimation { duration: 150 } }
+
+                    Rectangle {
+                        x: autoplayRow.on ? parent.width - width - 3 : 3
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 18
+                        height: 18
+                        radius: 9
+                        color: autoplayRow.on ? Theme.accentText : Theme.textSecondary
+                        Behavior on x { NumberAnimation { duration: 150; easing.type: Easing.OutCubic } }
+                    }
+                }
+            }
+        }
+
         // --- About -------------------------------------------------------------
         SectionTitle { text: qsTr("About") }
         Note {

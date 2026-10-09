@@ -12,7 +12,18 @@ ApplicationWindow {
     property alias volume: settings.volume
     // How far a double-tap (or J / L) skips, in seconds.
     property alias skipSeconds: settings.skipSeconds
+    // Play the next video in the folder when one ends.
+    property alias autoplay: settings.autoplay
     readonly property bool isFullScreen: visibility === Window.FullScreen
+    // Set once the user has confirmed closing while a video plays.
+    property bool closeConfirmed: false
+
+    onClosing: close => {
+        if (watch.playing && !closeConfirmed) {
+            close.accepted = false;
+            closeDialog.open();
+        }
+    }
     property int visibilityBeforeFullScreen: Window.Windowed
 
     function play(path) {
@@ -85,6 +96,7 @@ ApplicationWindow {
         location: VideoLibrary.settingsFile()
         property real volume: 100
         property int skipSeconds: 10
+        property bool autoplay: true
     }
 
     FileDialog {
@@ -250,6 +262,84 @@ ApplicationWindow {
     WatchView {
         id: watch
         anchors.fill: parent
+    }
+
+    // "Close Better Video Player?" while a video is playing.
+    Popup {
+        id: closeDialog
+
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(420, window.width - 48)
+        modal: true
+        padding: 24
+
+        Overlay.modal: Rectangle { color: "#99000000" }
+
+        background: Rectangle {
+            radius: 24
+            color: "#141414"
+            border.color: "#26FFFFFF"
+        }
+
+        component DialogButton: AbstractButton {
+            id: dialogButton
+            property bool primary: false
+            hoverEnabled: true
+            focusPolicy: Qt.NoFocus
+            leftPadding: 20
+            rightPadding: 20
+            topPadding: 10
+            bottomPadding: 10
+            HoverHandler { cursorShape: Qt.PointingHandCursor }
+            background: Rectangle {
+                radius: height / 2
+                color: dialogButton.primary ? (dialogButton.hovered ? Qt.lighter(Theme.accent, 1.1) : Theme.accent)
+                                            : (dialogButton.hovered ? "#3A3A3A" : "#2A2A2A")
+            }
+            contentItem: Text {
+                text: dialogButton.text
+                color: dialogButton.primary ? Theme.accentText : Theme.textPrimary
+                font.pixelSize: 14
+                font.weight: Font.Bold
+            }
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 10
+
+            Text {
+                text: qsTr("Close Better Video Player?")
+                color: Theme.textPrimary
+                font.pixelSize: 20
+                font.weight: Font.Bold
+            }
+            Text {
+                Layout.fillWidth: true
+                text: qsTr("A video is still playing. Your place will be saved, so you can pick up where you left off.")
+                color: Theme.textSecondary
+                font.pixelSize: 14
+                wrapMode: Text.Wrap
+            }
+
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                Layout.topMargin: 12
+                spacing: 8
+
+                DialogButton {
+                    text: qsTr("Keep watching")
+                    onClicked: closeDialog.close()
+                }
+                DialogButton {
+                    primary: true
+                    text: qsTr("Close")
+                    onClicked: {
+                        window.closeConfirmed = true;
+                        window.close();
+                    }
+                }
+            }
+        }
     }
 
     Component.onCompleted: {
