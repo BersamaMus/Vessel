@@ -125,11 +125,12 @@ VideoLibrary::VideoLibrary(QObject *parent)
         m_sources.append(source);
     }
 
+    // Home's shelves are about the library, not whatever drive is plugged in.
     m_continueWatching = new VideoModel(this, [this] {
         QList<int> rows;
         for (int i = 0; i < m_videos.size(); ++i) {
             const VideoInfo &v = m_videos[i];
-            if (v.watchedAt > 0 && !v.finished && v.position >= kMinProgress)
+            if (!v.external && v.watchedAt > 0 && !v.finished && v.position >= kMinProgress)
                 rows.append(i);
         }
         std::sort(rows.begin(), rows.end(), [this](int a, int b) {
@@ -138,7 +139,6 @@ VideoLibrary::VideoLibrary(QObject *parent)
         return rows.mid(0, kShelfSize);
     }, this);
 
-    // Recently added and Quick picks are about the library, not whatever drive is plugged in.
     m_recentlyAdded = new VideoModel(this, [this] {
         QList<int> rows;
         for (int i = 0; i < m_videos.size(); ++i)
@@ -565,16 +565,13 @@ VideoModel *VideoLibrary::suggestionsFor(const QString &path)
             const VideoInfo &playing = m_videos[current];
             return playing.external ? v.root == playing.root : !v.external;
         };
+        // The video's own folder is already listed above, as the playlist.
         QList<int> others;
-        QList<int> sameFolder;
         for (int i = 0; i < m_videos.size(); ++i) {
-            if (m_videos[i].path == path || !belongs(m_videos[i]))
-                continue;
-            (m_videos[i].dir == folder ? sameFolder : others).append(i);
+            if (m_videos[i].dir != folder && belongs(m_videos[i]))
+                others.append(i);
         }
         std::shuffle(others.begin(), others.end(), *QRandomGenerator::global());
-        std::shuffle(sameFolder.begin(), sameFolder.end(), *QRandomGenerator::global());
-        others.append(sameFolder);
         return others.mid(0, 12);
     });
     m_folderVideoModels.removeAll(nullptr);
