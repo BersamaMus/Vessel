@@ -555,11 +555,19 @@ QString VideoLibrary::nextInFolder(const QString &path) const
 VideoModel *VideoLibrary::suggestionsFor(const QString &path)
 {
     auto *model = new VideoModel(this, [this, path] {
+        const int current = m_byPath.value(path, -1);
         const QString folder = folderOf(path);
+        // A drive's videos only suggest others on the same drive; library videos only library ones.
+        const auto belongs = [&](const VideoInfo &v) {
+            if (current < 0)
+                return !v.external;
+            const VideoInfo &playing = m_videos[current];
+            return playing.external ? v.root == playing.root : !v.external;
+        };
         QList<int> others;
         QList<int> sameFolder;
         for (int i = 0; i < m_videos.size(); ++i) {
-            if (m_videos[i].path == path)
+            if (m_videos[i].path == path || !belongs(m_videos[i]))
                 continue;
             (m_videos[i].dir == folder ? sameFolder : others).append(i);
         }
