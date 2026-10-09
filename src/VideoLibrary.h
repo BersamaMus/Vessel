@@ -115,6 +115,15 @@ public:
     Q_INVOKABLE QString nextInFolder(const QString &path) const;
     // The video before this one in its folder, or "" at the start.
     Q_INVOKABLE QString previousInFolder(const QString &path) const;
+    // Subtitle files that belong to a video, best match first: same name (ignoring case,
+    // spaces and punctuation, plus an optional language tag like ".en"), the same
+    // episode (S01E02, 1x02, "Season 1 Episode 2"), or any subtitle in a folder that
+    // holds only this video. Also looks in Subs/Subtitles sub-folders.
+    Q_INVOKABLE QStringList subtitlesFor(const QString &path) const;
+    // What the user chose for a video's subtitles: the subtitle file to load, "" for
+    // none, or undefined if they haven't been asked (or the chosen file is gone).
+    Q_INVOKABLE QVariant subtitleChoice(const QString &path) const;
+    Q_INVOKABLE void setSubtitleChoice(const QString &path, const QString &subtitlePath);
     // Opens the file's folder in the system file manager, with the file selected where possible.
     Q_INVOKABLE void showInFileManager(const QString &path) const;
     // A random selection of videos from other folders: on the same drive for a

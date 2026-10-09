@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQuick.Dialogs
 import QtQuick.Effects
 import QtQuick.Layouts
 
@@ -30,6 +31,14 @@ Item {
     // The double-tap skip in progress: which side, and how far so far.
     property int seekSide: 0
     property int seekTotal: 0
+    // Subtitle files found for this video, and the one being offered ("" for no prompt).
+    property var subtitleCandidates: []
+    property string subtitleOffer: ""
+    // Controls showing on the video: subtitles move up out of their way.
+    readonly property bool controlsOnVideo: mode !== "closed" && controlsShown && miniProgress < 0.2
+    readonly property int subtitlePosition: controlsOnVideo ? Math.round(100 - 9000 / Math.max(frame.height, 300)) : 100
+
+    onSubtitlePositionChanged: mpv.setMpvProperty("sub-pos", subtitlePosition)
     // Rebuilt when the library finishes scanning (a file can be opened before that).
     readonly property var queue: path !== "" && VideoLibrary.count >= 0 ? VideoLibrary.videosIn(VideoLibrary.folderOf(path)) : null
     readonly property var suggestions: path !== "" && VideoLibrary.count >= 0 ? VideoLibrary.suggestionsFor(path) : null
@@ -66,7 +75,15 @@ Item {
         errorText.text = "";
         path = newPath;
         mpv.volume = app.volume;
-        mpv.open(newPath, VideoLibrary.resumePosition(newPath));
+
+        // Subtitle files that seem to belong to the video: offered the first time,
+        // then loaded (or not) as the user chose.
+        const found = VideoLibrary.subtitlesFor(newPath);
+        const choice = VideoLibrary.subtitleChoice(newPath);
+        subtitleCandidates = found;
+        subtitleOffer = choice === undefined && found.length > 0 ? found[0] : "";
+        const subtitles = choice ? [choice].concat(found.filter(file => file !== choice)) : [];
+        mpv.open(newPath, VideoLibrary.resumePosition(newPath), subtitles);
         if (mode === "closed") {
             miniProgress = 0;
             fullProgress = 0;
@@ -87,6 +104,44 @@ Item {
             open(previousPath);
     }
 
+    // "Turn on" in the subtitle prompt: show the best match, list the others.
+    function acceptSubtitles() {
+        if (subtitleCandidates.length === 0)
+            return;
+        subtitleCandidates.forEach((file, i) => mpv.addSubtitleFile(file, i === 0));
+        VideoLibrary.setSubtitleChoice(path, subtitleCandidates[0]);
+        subtitleOffer = "";
+    }
+
+    function declineSubtitles() {
+        VideoLibrary.setSubtitleChoice(path, "");
+        subtitleOffer = "";
+    }
+
+    // C: subtitles off, or back on (the first track, or the one on offer).
+    function toggleSubtitles() {
+        if (mpv.subtitleId > 0)
+            chooseSubtitle(null);
+        else if (mpv.subtitleTracks.length > 0)
+            chooseSubtitle(mpv.subtitleTracks[0]);
+        else
+            acceptSubtitles();   // load what was found, even if declined before
+        wake();
+    }
+
+    // From the subtitles menu: null for off. Remembered for next time.
+    function chooseSubtitle(track) {
+        subtitleOffer = "";
+        if (!track) {
+            mpv.setSubtitleTrack(0);
+            VideoLibrary.setSubtitleChoice(path, "");
+            return;
+        }
+        mpv.setSubtitleTrack(track.id);
+        if (track.file)
+            VideoLibrary.setSubtitleChoice(path, track.file);
+    }
+
     // -1 for the left third of the video, 1 for the right third, 0 for the middle.
     function sideAt(x) {
         return x < frame.width / 3 ? -1 : x > frame.width * 2 / 3 ? 1 : 0;
@@ -96,8 +151,8 @@ Item {
         if (side !== seekSide)
             seekTotal = 0;
         seekSide = side;
-        seekTotal += 10;
-        mpv.seekRelative(side * 10);
+        seekTotal += app.skipSeconds;
+        mpv.seekRelative(side * app.skipSeconds);
         seekBurst.restart();
     }
 
@@ -165,11 +220,6 @@ Item {
         wake();
     }
 
-    function openFolder() {
-        minimize();
-        app.openFolder(details.folder);
-    }
-
     function scrollQueueToCurrent() {
         const index = queue ? queue.indexOf(path) : -1;
         if (index >= 0)
@@ -220,7 +270,7 @@ Item {
         id: hideTimer
         interval: 2500
         onTriggered: {
-            if (!mpv.paused && !seekBar.pressed && !controlsHover.hovered)
+            if (!mpv.paused && !seekBar.pressed && !controlsHover.hovered && !subtitleMenu.opened)
                 watch.controlsShown = false;
         }
     }
@@ -230,12 +280,12 @@ Item {
         id: leaveTimer
         interval: 300
         onTriggered: {
-            if (!mpv.paused && !seekBar.pressed)
+            if (!mpv.paused && !seekBar.pressed && !subtitleMenu.opened)
                 watch.controlsShown = false;
         }
     }
 
-    // Double-tap seeking, as on YouTube: double-tap a side to skip 10 seconds,
+    // Double-tap seeking, as on YouTube: double-tap a side to skip (10 seconds by default),
     // and keep tapping there to skip more.
     Timer {
         id: seekBurst
@@ -299,37 +349,6 @@ Item {
         onWheel: wheel => wheel.accepted = true
     }
 
-    component Chip: AbstractButton {
-        id: chip
-        property string iconName
-        hoverEnabled: true
-        focusPolicy: Qt.NoFocus
-        leftPadding: 12
-        rightPadding: 16
-        topPadding: 8
-        bottomPadding: 8
-        HoverHandler { cursorShape: Qt.PointingHandCursor }
-        background: Rectangle {
-            radius: height / 2
-            color: chip.pressed ? "#3A3A3A" : chip.hovered ? "#2E2E2E" : Theme.surfaceHigh
-        }
-        contentItem: Row {
-            spacing: 8
-            Icon {
-                anchors.verticalCenter: parent.verticalCenter
-                name: chip.iconName
-                size: 20
-            }
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: chip.text
-                color: Theme.textPrimary
-                font.pixelSize: 14
-                font.weight: Font.DemiBold
-            }
-        }
-    }
-
     Item {
         id: page
         anchors.fill: parent
@@ -364,35 +383,6 @@ Item {
                 color: Theme.textSecondary
                 font.pixelSize: 14
                 elide: Text.ElideRight
-            }
-
-            Flow {
-                Layout.fillWidth: true
-                Layout.topMargin: 6
-                spacing: 8
-
-                Chip {
-                    visible: watch.details.inLibrary ?? false
-                    iconName: "folder"
-                    text: qsTr("Open folder")
-                    onClicked: watch.openFolder()
-                }
-                Chip {
-                    visible: watch.nextPath !== ""
-                    iconName: "skip_next"
-                    text: qsTr("Next")
-                    onClicked: watch.playNext()
-                }
-                Chip {
-                    iconName: "pip"
-                    text: qsTr("Mini player")
-                    onClicked: watch.minimize()
-                }
-                Chip {
-                    iconName: "fullscreen"
-                    text: qsTr("Full screen")
-                    onClicked: watch.enterFull()
-                }
             }
 
             Rectangle {
@@ -878,6 +868,52 @@ Item {
                         }
                         Item { Layout.fillWidth: true }
                         IconButton {
+                            id: subtitleButton
+                            iconName: "subtitles"
+                            iconColor: mpv.subtitleId > 0 ? Theme.accent : Theme.textPrimary
+                            tip: qsTr("Subtitles (C)")
+                            onClicked: subtitleMenu.opened ? subtitleMenu.close() : subtitleMenu.open()
+
+                            AppMenu {
+                                id: subtitleMenu
+                                // Opens upwards from the button, right-aligned with it.
+                                x: subtitleButton.width - width
+                                y: -height - 6
+
+                                AppMenuItem {
+                                    text: qsTr("Off")
+                                    checkable: true
+                                    checked: mpv.subtitleId === 0
+                                    onTriggered: watch.chooseSubtitle(null)
+                                }
+
+                                // One item per subtitle track, inserted after "Off".
+                                Instantiator {
+                                    model: mpv.subtitleTracks
+                                    delegate: AppMenuItem {
+                                        required property var modelData
+                                        text: modelData.label
+                                        checkable: true
+                                        checked: modelData.selected
+                                        onTriggered: watch.chooseSubtitle(modelData)
+                                    }
+                                    onObjectAdded: (index, object) => subtitleMenu.insertItem(index + 1, object)
+                                    onObjectRemoved: (index, object) => subtitleMenu.removeItem(object)
+                                }
+
+                                MenuSeparator {
+                                    contentItem: Rectangle {
+                                        implicitHeight: 1
+                                        color: "#26FFFFFF"
+                                    }
+                                }
+                                AppMenuItem {
+                                    text: qsTr("Add subtitle file…")
+                                    onTriggered: subtitleDialog.open()
+                                }
+                            }
+                        }
+                        IconButton {
                             iconName: mpv.muted || mpv.volume === 0 ? "volume_off" : "volume"
                             tip: qsTr("Mute (M)")
                             onClicked: mpv.muted = !mpv.muted
@@ -919,6 +955,90 @@ Item {
                             value: mpv.position
                             restoreMode: Binding.RestoreNone
                         }
+                    }
+                }
+            }
+        }
+
+        // --- "Subtitles found" prompt ---------------------------------------------
+        Rectangle {
+            id: subtitlePrompt
+
+            readonly property bool wanted: watch.subtitleOffer !== "" && mpv.loaded && watch.miniProgress < 0.5
+
+            anchors.horizontalCenter: parent.horizontalCenter
+            y: 56
+            width: Math.min(parent.width - 32, promptRow.implicitWidth + 32)
+            height: promptRow.implicitHeight + 24
+            radius: Theme.radiusCard
+            color: "#F21C1C1C"
+            border.color: "#26FFFFFF"
+            opacity: wanted ? 1 : 0
+            visible: opacity > 0
+            Behavior on opacity { NumberAnimation { duration: 200 } }
+
+            // Unanswered, it goes away (and asks again next time).
+            onWantedChanged: wanted ? promptTimer.restart() : promptTimer.stop()
+            Timer {
+                id: promptTimer
+                interval: 15000
+                onTriggered: watch.subtitleOffer = ""
+            }
+
+            // Clicks on the card itself shouldn't pause the video.
+            MouseArea {
+                anchors.fill: parent
+            }
+
+            RowLayout {
+                id: promptRow
+                anchors.centerIn: parent
+                width: parent.width - 32
+                spacing: 12
+
+                Icon {
+                    name: "subtitles"
+                    color: Theme.accent
+                }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    Layout.maximumWidth: 360
+                    spacing: 1
+                    Text {
+                        text: qsTr("Subtitles found")
+                        color: Theme.textPrimary
+                        font.pixelSize: 14
+                        font.weight: Font.Bold
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: watch.subtitleOffer.split("/").pop()
+                        color: Theme.textSecondary
+                        font.pixelSize: 13
+                        elide: Text.ElideMiddle
+                    }
+                }
+                TextAction {
+                    text: qsTr("Turn on")
+                    onClicked: watch.acceptSubtitles()
+                }
+                AbstractButton {
+                    id: declineButton
+                    text: qsTr("No thanks")
+                    hoverEnabled: true
+                    focusPolicy: Qt.NoFocus
+                    padding: 8
+                    onClicked: watch.declineSubtitles()
+                    HoverHandler { cursorShape: Qt.PointingHandCursor }
+                    background: Rectangle {
+                        radius: height / 2
+                        color: declineButton.hovered ? Theme.hover : "transparent"
+                    }
+                    contentItem: Text {
+                        text: declineButton.text
+                        color: Theme.textSecondary
+                        font.pixelSize: 15
+                        font.weight: Font.DemiBold
                     }
                 }
             }
@@ -972,6 +1092,19 @@ Item {
         }
     }
 
+    FileDialog {
+        id: subtitleDialog
+        title: qsTr("Add a subtitle file")
+        currentFolder: watch.details.folder ? "file:///" + watch.details.folder : ""
+        nameFilters: [qsTr("Subtitles (*.srt *.ass *.ssa *.vtt *.sub)"), qsTr("All files (*)")]
+        onAccepted: {
+            const file = VideoLibrary.localPath(selectedFile);
+            mpv.addSubtitleFile(file);
+            VideoLibrary.setSubtitleChoice(watch.path, file);
+            watch.subtitleOffer = "";
+        }
+    }
+
     // --- Keyboard ------------------------------------------------------------
     component Key: Shortcut {
         enabled: watch.mode === "watch" || watch.mode === "full"
@@ -979,8 +1112,8 @@ Item {
     Key { sequences: ["Space", "K"]; onActivated: { mpv.togglePause(); watch.wake(); } }
     Key { sequence: "Left"; onActivated: { mpv.seekRelative(-5); watch.wake(); } }
     Key { sequence: "Right"; onActivated: { mpv.seekRelative(5); watch.wake(); } }
-    Key { sequence: "J"; onActivated: { mpv.seekRelative(-10); watch.wake(); } }
-    Key { sequence: "L"; onActivated: { mpv.seekRelative(10); watch.wake(); } }
+    Key { sequence: "J"; onActivated: { mpv.seekRelative(-watch.app.skipSeconds); watch.wake(); } }
+    Key { sequence: "L"; onActivated: { mpv.seekRelative(watch.app.skipSeconds); watch.wake(); } }
     Key { sequence: "Up"; onActivated: watch.setVolume(Math.min(100, mpv.volume + 5)) }
     Key { sequence: "Down"; onActivated: watch.setVolume(Math.max(0, mpv.volume - 5)) }
     Key { sequence: "M"; onActivated: { mpv.muted = !mpv.muted; watch.wake(); } }
@@ -988,6 +1121,7 @@ Item {
     Key { sequence: "I"; onActivated: watch.minimize() }
     Key { sequence: "Shift+N"; onActivated: watch.playNext() }
     Key { sequence: "Shift+P"; onActivated: watch.playPrevious() }
+    Key { sequence: "C"; onActivated: watch.toggleSubtitles() }
     Key { sequence: "Esc"; onActivated: watch.mode === "full" ? watch.exitFull() : watch.minimize() }
     Shortcut {
         // In the mini player, I brings the watch page back.

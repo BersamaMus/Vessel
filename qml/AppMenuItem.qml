@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls.Basic
 
+// A menu row. Checkable items get a tick next to the chosen one.
 MenuItem {
     id: item
 
@@ -8,11 +9,31 @@ MenuItem {
     rightPadding: 16
     implicitHeight: 40
 
-    contentItem: Text {
-        text: item.text
-        color: Theme.textPrimary
-        font.pixelSize: 15
-        verticalAlignment: Text.AlignVCenter
+    contentItem: Row {
+        spacing: 10
+
+        Item {
+            visible: item.checkable
+            anchors.verticalCenter: parent.verticalCenter
+            width: 20
+            height: 20
+            Icon {
+                anchors.centerIn: parent
+                visible: item.checked
+                name: "check"
+                size: 20
+                color: Theme.accent
+            }
+        }
+
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            width: Math.min(implicitWidth, 320)
+            text: item.text
+            color: item.checked ? Theme.accent : Theme.textPrimary
+            font.pixelSize: 15
+            elide: Text.ElideMiddle
+        }
     }
 
     background: Rectangle {

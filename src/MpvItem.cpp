@@ -2,6 +2,8 @@
 
 #include <QCoreApplication>
 #include <QDebug>
+#include <QFileInfo>
+#include <QLocale>
 #include <QOpenGLContext>
 #include <QOpenGLFramebufferObject>
 #include <QPointer>
@@ -18,6 +20,43 @@ void *getProcAddress(void * /*ctx*/, const char *name)
 {
     QOpenGLContext *glctx = QOpenGLContext::currentContext();
     return glctx ? reinterpret_cast<void *>(glctx->getProcAddress(name)) : nullptr;
+}
+
+QVariant toVariant(const mpv_node &node)
+{
+    switch (node.format) {
+    case MPV_FORMAT_STRING:
+        return QString::fromUtf8(node.u.string);
+    case MPV_FORMAT_FLAG:
+        return node.u.flag != 0;
+    case MPV_FORMAT_INT64:
+        return qint64(node.u.int64);
+    case MPV_FORMAT_DOUBLE:
+        return node.u.double_;
+    case MPV_FORMAT_NODE_ARRAY: {
+        QVariantList list;
+        for (int i = 0; i < node.u.list->num; ++i)
+            list.append(toVariant(node.u.list->values[i]));
+        return list;
+    }
+    case MPV_FORMAT_NODE_MAP: {
+        QVariantMap map;
+        for (int i = 0; i < node.u.list->num; ++i)
+            map.insert(QString::fromUtf8(node.u.list->keys[i]), toVariant(node.u.list->values[i]));
+        return map;
+    }
+    default:
+        return {};
+    }
+}
+
+// "English", from a track's "eng" / "en" tag.
+QString languageName(const QString &code)
+{
+    if (code.isEmpty())
+        return {};
+    const QLocale::Language language = QLocale::codeToLanguage(code, QLocale::AnyLanguageCode);
+    return language == QLocale::AnyLanguage ? code : QLocale::languageToString(language);
 }
 
 } // namespace
@@ -108,6 +147,8 @@ MpvItem::MpvItem(QQuickItem *parent)
     mpv_set_option_string(m_mpv, "ytdl", "no");         // offline player
     mpv_set_option_string(m_mpv, "input-default-bindings", "no");
     mpv_set_option_string(m_mpv, "input-vo-keyboard", "no");
+    // The library picks subtitle files itself (see VideoLibrary::subtitlesFor).
+    mpv_set_option_string(m_mpv, "sub-auto", "no");
     mpv_request_log_messages(m_mpv, "warn");
 
     if (mpv_initialize(m_mpv) < 0)
@@ -123,6 +164,7 @@ MpvItem::MpvItem(QQuickItem *parent)
     mpv_observe_property(m_mpv, 0, "width", MPV_FORMAT_INT64);
     mpv_observe_property(m_mpv, 0, "height", MPV_FORMAT_INT64);
     mpv_observe_property(m_mpv, 0, "video-format", MPV_FORMAT_STRING);
+    mpv_observe_property(m_mpv, 0, "track-list", MPV_FORMAT_NODE);
 
     mpv_set_wakeup_callback(m_mpv, [](void *ctx) {
         QMetaObject::invokeMethod(static_cast<MpvItem *>(ctx), &MpvItem::processEvents,
@@ -187,12 +229,18 @@ void MpvItem::processEvents()
             } else if (name == "video-format") {
                 m_videoFormat = has ? QString::fromUtf8(*static_cast<char **>(prop->data)) : QString();
                 emit videoInfoChanged();
+            } else if (name == "track-list") {
+                updateTracks(has ? toVariant(*static_cast<mpv_node *>(prop->data)).toList() : QVariantList());
             }
             break;
         }
         case MPV_EVENT_FILE_LOADED:
             m_loaded = true;
             emit loadedChanged();
+            // The first matching subtitle file is shown; the rest are just listed.
+            for (int i = 0; i < m_subtitlesToAdd.size(); ++i)
+                command({"sub-add", m_subtitlesToAdd[i], i == 0 ? QStringLiteral("select") : QStringLiteral("auto")});
+            m_subtitlesToAdd.clear();
             break;
         case MPV_EVENT_END_FILE: {
             auto *end = static_cast<mpv_event_end_file *>(event->data);
@@ -228,21 +276,22 @@ void MpvItem::command(const QStringList &args)
     mpv_command_async(m_mpv, 0, argv.data());
 }
 
-void MpvItem::open(const QString &path, double startSeconds)
+void MpvItem::open(const QString &path, double startSeconds, const QStringList &subtitles)
 {
     if (!m_rendererReady) {
         m_pendingPath = path;
         m_pendingStart = startSeconds;
+        m_pendingSubtitles = subtitles;
         return;
     }
-    load(path, startSeconds);
+    load(path, startSeconds, subtitles);
 }
 
 void MpvItem::onRendererReady()
 {
     m_rendererReady = true;
     if (!m_pendingPath.isEmpty())
-        load(std::exchange(m_pendingPath, QString()), m_pendingStart);
+        load(std::exchange(m_pendingPath, QString()), m_pendingStart, std::exchange(m_pendingSubtitles, {}));
 }
 
 void MpvItem::onRendererGone()
@@ -250,9 +299,61 @@ void MpvItem::onRendererGone()
     m_rendererReady = false;
 }
 
+void MpvItem::updateTracks(const QVariantList &tracks)
+{
+    QVariantList subtitles;
+    int selected = 0;
+    for (const QVariant &entry : tracks) {
+        const QVariantMap track = entry.toMap();
+        if (track.value(QStringLiteral("type")).toString() != QLatin1String("sub"))
+            continue;
+        const int id = track.value(QStringLiteral("id")).toInt();
+        const bool external = track.value(QStringLiteral("external")).toBool();
+        const QString language = languageName(track.value(QStringLiteral("lang")).toString());
+        // Files are best known by name; built-in tracks by title or language.
+        QString label = external ? QFileInfo(track.value(QStringLiteral("external-filename")).toString()).fileName()
+                                 : track.value(QStringLiteral("title")).toString();
+        if (label.isEmpty())
+            label = language.isEmpty() ? tr("Track %1").arg(id) : language;
+        else if (!external && !language.isEmpty() && !label.contains(language, Qt::CaseInsensitive))
+            label += QStringLiteral(" (%1)").arg(language);
+
+        const bool isSelected = track.value(QStringLiteral("selected")).toBool();
+        if (isSelected)
+            selected = id;
+        subtitles.append(QVariantMap{
+            {"id", id},
+            {"label", label},
+            {"external", external},
+            {"file", external ? track.value(QStringLiteral("external-filename")).toString() : QString()},
+            {"selected", isSelected},
+        });
+    }
+    m_subtitleTracks = subtitles;
+    m_subtitleId = selected;
+    emit tracksChanged();
+}
+
+void MpvItem::setSubtitleTrack(int id)
+{
+    command({"set", "sid", id > 0 ? QString::number(id) : QStringLiteral("no")});
+}
+
+void MpvItem::addSubtitleFile(const QString &path, bool select)
+{
+    command({"sub-add", path, select ? QStringLiteral("select") : QStringLiteral("auto")});
+}
+
+void MpvItem::setMpvProperty(const QString &name, const QVariant &value)
+{
+    command({"set", name, value.toString()});
+}
+
 void MpvItem::stop()
 {
     m_pendingPath.clear();
+    m_pendingSubtitles.clear();
+    m_subtitlesToAdd.clear();
     command({"stop"});
     if (m_loaded) {
         m_loaded = false;
@@ -260,8 +361,9 @@ void MpvItem::stop()
     }
 }
 
-void MpvItem::load(const QString &path, double startSeconds)
+void MpvItem::load(const QString &path, double startSeconds, const QStringList &subtitles)
 {
+    m_subtitlesToAdd = subtitles;
     if (m_loaded) {
         m_loaded = false;
         emit loadedChanged();

@@ -14,6 +14,7 @@
 #include <QJsonDocument>
 #include <QLocale>
 #include <QRandomGenerator>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
 #include <QSettings>
@@ -55,21 +56,53 @@ QString withSlash(const QString &folder)
     return folder.endsWith(QLatin1Char('/')) ? folder : folder + QLatin1Char('/');
 }
 
-QList<VideoInfo> scanFolder(const QString &root, bool external, const QString &driveId)
+bool isVideoFile(const QFileInfo &file)
 {
     static const QSet<QString> extensions = {
         "mp4", "m4v", "mkv", "mov", "webm", "avi", "wmv", "flv", "ts", "m2ts",
         "mts", "mpg", "mpeg", "3gp", "ogv", "divx", "asf", "rmvb",
     };
+    // Empty files are unfinished downloads; they can't be played.
+    return extensions.contains(file.suffix().toLower()) && file.size() > 0;
+}
 
+// "Spider-Man Homecoming (2017)" -> "spidermanhomecoming2017", so names that only
+// differ in case, spacing or punctuation compare equal.
+QString normalizedName(const QString &name)
+{
+    QString result;
+    for (const QChar c : name)
+        if (c.isLetterOrNumber())
+            result += c.toLower();
+    return result;
+}
+
+// Season and episode from "S01E02", "1x02" or "Season 1 Episode 2"; {-1, -1} if none.
+std::pair<int, int> episodeOf(const QString &name)
+{
+    static const QRegularExpression patterns[] = {
+        QRegularExpression(QStringLiteral("s(\\d{1,2})[ ._-]*e(\\d{1,3})"), QRegularExpression::CaseInsensitiveOption),
+        QRegularExpression(QStringLiteral("season\\D{0,3}(\\d{1,2})\\D{0,3}episode\\D{0,3}(\\d{1,3})"), QRegularExpression::CaseInsensitiveOption),
+        // Not "1920x1080": no digits either side.
+        QRegularExpression(QStringLiteral("(?<!\\d)(\\d{1,2})x(\\d{2})(?!\\d)")),
+    };
+    for (const QRegularExpression &pattern : patterns) {
+        const QRegularExpressionMatch match = pattern.match(name);
+        if (match.hasMatch())
+            return {match.captured(1).toInt(), match.captured(2).toInt()};
+    }
+    return {-1, -1};
+}
+
+QList<VideoInfo> scanFolder(const QString &root, bool external, const QString &driveId)
+{
     QList<VideoInfo> videos;
     const QString prefix = withSlash(root);
     // Hidden and system folders (the recycle bin, System Volume Information) are skipped.
     QDirIterator it(root, QDir::Files, QDirIterator::Subdirectories);
     while (it.hasNext()) {
         const QFileInfo file = it.nextFileInfo();
-        // Empty files are unfinished downloads; they can't be played.
-        if (!extensions.contains(file.suffix().toLower()) || file.size() == 0)
+        if (!isVideoFile(file))
             continue;
 
         VideoInfo video;
@@ -593,6 +626,77 @@ QString VideoLibrary::previousInFolder(const QString &path) const
     return m_videos[index - 1].path;
 }
 
+QStringList VideoLibrary::subtitlesFor(const QString &path) const
+{
+    static const QStringList patterns{QStringLiteral("*.srt"), QStringLiteral("*.ass"),
+                                      QStringLiteral("*.ssa"), QStringLiteral("*.vtt")};
+    const QFileInfo video(path);
+    const QDir dir = video.absoluteDir();
+    const QString baseName = video.completeBaseName();
+
+    // Next to the video, and in Subs / Subtitles folders (including Subs/<video name>/,
+    // as some releases do). Files in a folder named after the video are its own.
+    QFileInfoList candidates = dir.entryInfoList(patterns, QDir::Files);
+    QFileInfoList ownFolder;
+    for (const QFileInfo &folder : dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        const QString name = folder.fileName().toLower();
+        if (name != QLatin1String("subs") && name != QLatin1String("sub")
+            && name != QLatin1String("subtitles") && name != QLatin1String("subtitle"))
+            continue;
+        const QDir subs(folder.absoluteFilePath());
+        candidates += subs.entryInfoList(patterns, QDir::Files);
+        ownFolder += QDir(subs.filePath(baseName)).entryInfoList(patterns, QDir::Files);
+    }
+
+    // In a folder with just this one video (a movie's own folder), every subtitle is its.
+    const QFileInfoList siblings = dir.entryInfoList(QDir::Files);
+    const bool onlyVideo = std::count_if(siblings.begin(), siblings.end(), isVideoFile) <= 1;
+
+    const QString name = normalizedName(baseName);
+    const std::pair<int, int> episode = episodeOf(baseName);
+    QStringList exact;
+    QStringList likely;
+    for (const QFileInfo &subtitle : std::as_const(candidates)) {
+        const QString subtitleName = normalizedName(subtitle.completeBaseName());
+        const QString rest = subtitleName.startsWith(name) ? subtitleName.mid(name.size()) : QString();
+        const bool languageTag = subtitleName.startsWith(name) && rest.size() <= 16
+            && std::all_of(rest.begin(), rest.end(), [](QChar c) { return c.isLetter(); });
+
+        if (subtitleName == name)
+            exact.append(subtitle.absoluteFilePath());
+        else if (languageTag   // "Movie.en", but not "Movie 2"
+                 || (episode.first >= 0 && episodeOf(subtitle.completeBaseName()) == episode)
+                 || onlyVideo)
+            likely.append(subtitle.absoluteFilePath());
+    }
+    for (const QFileInfo &subtitle : std::as_const(ownFolder))
+        likely.append(subtitle.absoluteFilePath());
+    return exact + likely;
+}
+
+QVariant VideoLibrary::subtitleChoice(const QString &path) const
+{
+    const QJsonObject entry = m_history.value(keyFor(path)).toObject();
+    if (!entry.contains(QStringLiteral("subtitle")))
+        return {};
+    const QString subtitle = entry.value(QStringLiteral("subtitle")).toString();
+    // Ask again if the chosen file has been moved or deleted.
+    if (!subtitle.isEmpty() && !QFileInfo::exists(subtitle))
+        return {};
+    return subtitle;
+}
+
+void VideoLibrary::setSubtitleChoice(const QString &path, const QString &subtitlePath)
+{
+    if (path.isEmpty())
+        return;
+    const QString key = keyFor(path);
+    QJsonObject entry = m_history.value(key).toObject();
+    entry.insert(QStringLiteral("subtitle"), subtitlePath);
+    m_history.insert(key, entry);
+    scheduleSave();
+}
+
 void VideoLibrary::showInFileManager(const QString &path) const
 {
 #ifdef Q_OS_WIN
@@ -657,8 +761,14 @@ void VideoLibrary::saveProgress(const QString &path, double position, double dur
         return;
     const bool finished = isFinished(position, duration);
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    m_history.insert(keyFor(path), QJsonObject{
-        {"position", position}, {"duration", duration}, {"watchedAt", now}, {"finished", finished}});
+    // Updated in place, keeping anything else remembered about the video (its subtitle choice).
+    const QString key = keyFor(path);
+    QJsonObject entry = m_history.value(key).toObject();
+    entry.insert(QStringLiteral("position"), position);
+    entry.insert(QStringLiteral("duration"), duration);
+    entry.insert(QStringLiteral("watchedAt"), now);
+    entry.insert(QStringLiteral("finished"), finished);
+    m_history.insert(key, entry);
     scheduleSave();
 
     const int index = m_byPath.value(path, -1);

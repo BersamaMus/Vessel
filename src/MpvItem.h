@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QQuickFramebufferObject>
+#include <QStringList>
+#include <QVariantList>
 #include <QtQml/qqmlregistration.h>
 
 struct mpv_handle;
@@ -23,6 +25,9 @@ class MpvItem : public QQuickFramebufferObject
     Q_PROPERTY(int videoWidth READ videoWidth NOTIFY videoInfoChanged)
     Q_PROPERTY(int videoHeight READ videoHeight NOTIFY videoInfoChanged)
     Q_PROPERTY(QString videoFormat READ videoFormat NOTIFY videoInfoChanged)
+    // Subtitle tracks: {id, label, external, file, selected}; subtitleId is the shown one, 0 for none.
+    Q_PROPERTY(QVariantList subtitleTracks READ subtitleTracks NOTIFY tracksChanged)
+    Q_PROPERTY(int subtitleId READ subtitleId NOTIFY tracksChanged)
 
 public:
     explicit MpvItem(QQuickItem *parent = nullptr);
@@ -41,13 +46,16 @@ public:
     int videoWidth() const { return m_videoWidth; }
     int videoHeight() const { return m_videoHeight; }
     QString videoFormat() const { return m_videoFormat; }
+    QVariantList subtitleTracks() const { return m_subtitleTracks; }
+    int subtitleId() const { return m_subtitleId; }
 
     void setPaused(bool paused);
     void setVolume(double volume);
     void setMuted(bool muted);
 
-    // Opens a local file, optionally starting part-way through (resume).
-    Q_INVOKABLE void open(const QString &path, double startSeconds = 0);
+    // Opens a local file, optionally starting part-way through (resume). The first
+    // of `subtitles` (subtitle files to load alongside it) is shown.
+    Q_INVOKABLE void open(const QString &path, double startSeconds = 0, const QStringList &subtitles = {});
     Q_INVOKABLE void togglePause();
     // Exact seek, for clicks and when scrubbing ends.
     Q_INVOKABLE void seek(double seconds);
@@ -56,6 +64,12 @@ public:
     Q_INVOKABLE void seekRelative(double seconds);
     // Stops playback and unloads the file.
     Q_INVOKABLE void stop();
+    // Shows subtitle track `id`, or none for 0.
+    Q_INVOKABLE void setSubtitleTrack(int id);
+    // Loads a subtitle file, and shows it unless `select` is false.
+    Q_INVOKABLE void addSubtitleFile(const QString &path, bool select = true);
+    // Sets any mpv property, e.g. "sub-pos".
+    Q_INVOKABLE void setMpvProperty(const QString &name, const QVariant &value);
 
 signals:
     void positionChanged();
@@ -67,6 +81,7 @@ signals:
     void titleChanged();
     void loadedChanged();
     void videoInfoChanged();
+    void tracksChanged();
     void errorOccurred(const QString &message);
 
 private:
@@ -76,7 +91,8 @@ private:
     void command(const QStringList &args);
     void onRendererReady();
     void onRendererGone();
-    void load(const QString &path, double startSeconds);
+    void load(const QString &path, double startSeconds, const QStringList &subtitles);
+    void updateTracks(const QVariantList &tracks);
 
     mpv_handle *m_mpv = nullptr;
     // mpv can't start video output until the render context exists, so a file
@@ -84,6 +100,9 @@ private:
     bool m_rendererReady = false;
     QString m_pendingPath;
     double m_pendingStart = 0;
+    QStringList m_pendingSubtitles;
+    // Subtitle files to add once the current file has loaded.
+    QStringList m_subtitlesToAdd;
     double m_position = 0;
     double m_duration = 0;
     bool m_paused = false;
@@ -95,4 +114,6 @@ private:
     int m_videoWidth = 0;
     int m_videoHeight = 0;
     QString m_videoFormat;
+    QVariantList m_subtitleTracks;
+    int m_subtitleId = 0;
 };

@@ -10,6 +10,8 @@ ApplicationWindow {
     // A file passed on the command line.
     property string startFile
     property alias volume: settings.volume
+    // How far a double-tap (or J / L) skips, in seconds.
+    property alias skipSeconds: settings.skipSeconds
     readonly property bool isFullScreen: visibility === Window.FullScreen
     property int visibilityBeforeFullScreen: Window.Windowed
 
@@ -82,6 +84,7 @@ ApplicationWindow {
         id: settings
         location: VideoLibrary.settingsFile()
         property real volume: 100
+        property int skipSeconds: 10
     }
 
     FileDialog {
