@@ -93,7 +93,7 @@ QVariant VideoModel::data(const QModelIndex &index, int role) const
     case TitleRole:
         return v.title;
     case SubtitleRole:
-        return folderLabel(v.folder, m_library->folderName(QString()));
+        return m_library->locationOf(v);
     case ThumbnailRole:
         return m_library->thumbnailUrl(libraryIndex);
     case DurationRole:
@@ -145,10 +145,11 @@ int VideoModel::indexOf(const QString &path) const
 // FolderModel
 // ---------------------------------------------------------------------------
 
-FolderModel::FolderModel(VideoLibrary *library, const QString &parentFolder, QObject *parent)
+FolderModel::FolderModel(VideoLibrary *library, const QString &parentFolder, Mode mode, QObject *parent)
     : QAbstractListModel(parent)
     , m_library(library)
     , m_parentFolder(parentFolder)
+    , m_mode(mode)
 {
     // Covers fill in as thumbnails are made.
     connect(library, &VideoLibrary::videoChanged, this, [this] {
@@ -163,27 +164,45 @@ void FolderModel::refresh()
     if (!m_library)
         return;
 
-    const QString prefix = m_parentFolder.isEmpty() ? QString() : m_parentFolder + QLatin1Char('/');
-    const auto isExtra = [](const VideoInfo &v) {
-        return v.folder.contains(QLatin1String("extra"), Qt::CaseInsensitive)
-            || v.path.contains(QLatin1String("sample"), Qt::CaseInsensitive);
+    // Extras and samples make poor covers; judged by the path inside the folder.
+    const auto isExtra = [](const VideoInfo &v, const QString &folder) {
+        const QString inside = v.path.mid(folder.size());
+        return inside.contains(QLatin1String("extra"), Qt::CaseInsensitive)
+            || inside.contains(QLatin1String("sample"), Qt::CaseInsensitive);
     };
-    QMap<QString, Entry> byName;
-    for (int i = 0; i < m_library->count(); ++i) {
-        const VideoInfo &v = m_library->video(i);
-        if (!v.folder.startsWith(prefix) || v.folder.size() == prefix.size())
-            continue;   // outside this folder, or directly in it
-        const QString name = v.folder.mid(prefix.size()).section(QLatin1Char('/'), 0, 0);
-        Entry &entry = byName[name];
+    QMap<QString, Entry> byFolder;
+    const auto add = [&](const QString &folder, const QString &name, int index) {
+        Entry &entry = byFolder[folder];
         entry.name = name;
-        entry.folder = prefix + name;
+        entry.folder = folder;
         ++entry.count;
         // The first video in natural order, but not an extra or a sample if possible.
-        if (entry.cover < 0 || (isExtra(m_library->video(entry.cover)) && !isExtra(v)))
-            entry.cover = i;
+        if (entry.cover < 0 || (isExtra(m_library->video(entry.cover), folder) && !isExtra(m_library->video(index), folder)))
+            entry.cover = index;
+    };
+
+    if (m_mode == Children && m_parentFolder.isEmpty()) {
+        // The library as a whole: one entry per library folder.
+        for (int i = 0; i < m_library->count(); ++i) {
+            const VideoInfo &v = m_library->video(i);
+            if (!v.external)
+                add(v.root, m_library->folderName(v.root), i);
+        }
+    } else {
+        const QStringList parents = m_mode == TopFolders ? m_library->libraryRoots() : QStringList{m_parentFolder};
+        for (const QString &parent : parents) {
+            const QString prefix = parent.endsWith(QLatin1Char('/')) ? parent : parent + QLatin1Char('/');
+            for (int i = 0; i < m_library->count(); ++i) {
+                const VideoInfo &v = m_library->video(i);
+                const QString name = v.dir.mid(prefix.size()).section(QLatin1Char('/'), 0, 0);
+                if (!v.dir.startsWith(prefix) || name.isEmpty())
+                    continue;   // outside this folder, or directly in it
+                add(prefix + name, name, i);
+            }
+        }
     }
 
-    QList<Entry> entries = byName.values();
+    QList<Entry> entries = byFolder.values();
     QCollator collator;
     collator.setNumericMode(true);
     collator.setCaseSensitivity(Qt::CaseInsensitive);

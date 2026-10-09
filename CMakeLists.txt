@@ -78,6 +78,8 @@ set(QML_FILES
     qml/HomePage.qml
     qml/FolderPage.qml
     qml/WatchView.qml
+    qml/ExternalPage.qml
+    qml/SettingsPage.qml
 )
 set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 # Serve the files from the module root so they see each other without imports.
@@ -94,9 +96,13 @@ qt_add_qml_module(BetterVideoPlayer
         src/Thumbnailer.cpp src/Thumbnailer.h
         src/VideoLibrary.cpp src/VideoLibrary.h
         src/VideoModels.cpp src/VideoModels.h
+        src/DriveWatcher.cpp src/DriveWatcher.h
 )
 
 target_include_directories(BetterVideoPlayer PRIVATE src)
+if(WIN32)
+    target_compile_definitions(BetterVideoPlayer PRIVATE NOMINMAX)
+endif()
 target_link_libraries(BetterVideoPlayer PRIVATE Qt6::Concurrent Qt6::OpenGL Qt6::Quick mpv::mpv)
 target_compile_definitions(BetterVideoPlayer PRIVATE PROJECT_VERSION="${PROJECT_VERSION}")
 

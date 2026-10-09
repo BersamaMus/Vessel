@@ -21,9 +21,22 @@ ApplicationWindow {
         contentStack.push(folderPage, { folder: folder });
     }
 
+    // 0 Home, 1 Library, 2 External, 3 Settings, as in the rail.
+    function showTab(index) {
+        rail.currentIndex = index;
+        contentStack.replace(null, [homePage, libraryPage, externalPage, settingsPage][index]);
+    }
+
     function showLibrary() {
-        rail.currentIndex = 1;
-        contentStack.replace(null, libraryPage);
+        showTab(1);
+    }
+
+    // A drive's folder, from the "connected" notice.
+    function openDrive(path) {
+        if (watch.mode === "watch" || watch.mode === "full")
+            watch.minimize();
+        showTab(2);
+        openFolder(path);
     }
 
     function openFileDialog() {
@@ -100,8 +113,7 @@ ApplicationWindow {
                     contentStack.pop(null);
                     return;
                 }
-                currentIndex = index;
-                contentStack.replace(null, index === 0 ? homePage : libraryPage);
+                window.showTab(index);
             }
         }
 
@@ -132,7 +144,18 @@ ApplicationWindow {
     }
     Component {
         id: libraryPage
-        FolderPage { isLibraryTab: true }
+        FolderPage {
+            isLibraryTab: true
+            folder: VideoLibrary.libraryHome
+        }
+    }
+    Component {
+        id: externalPage
+        ExternalPage {}
+    }
+    Component {
+        id: settingsPage
+        SettingsPage {}
     }
     Component {
         id: folderPage
@@ -144,6 +167,79 @@ ApplicationWindow {
         onDropped: drop => {
             if (drop.hasUrls)
                 window.play(VideoLibrary.localPath(drop.urls[0]));
+        }
+    }
+
+    // "SANDISK (E:) connected · 34 videos", with a way to open it.
+    Rectangle {
+        id: notice
+
+        property string drivePath
+
+        function show(message, path) {
+            noticeText.text = message;
+            drivePath = path;
+            opacity = 1;
+            noticeTimer.restart();
+        }
+
+        x: rail.width + 20
+        y: window.height - height - 20
+        width: noticeRow.implicitWidth + 28
+        height: 52
+        radius: Theme.radiusCard
+        color: Theme.surfaceHigh
+        border.color: "#26FFFFFF"
+        opacity: 0
+        visible: opacity > 0
+        Behavior on opacity { NumberAnimation { duration: 200 } }
+
+        RowLayout {
+            id: noticeRow
+            anchors.verticalCenter: parent.verticalCenter
+            x: 16
+            spacing: 12
+
+            Icon {
+                name: "usb"
+                color: Theme.accent
+            }
+            Text {
+                id: noticeText
+                color: Theme.textPrimary
+                font.pixelSize: 14
+            }
+            TextAction {
+                text: qsTr("Open")
+                onClicked: {
+                    notice.opacity = 0;
+                    window.openDrive(notice.drivePath);
+                }
+            }
+        }
+
+        Timer {
+            id: noticeTimer
+            interval: 6000
+            onTriggered: notice.opacity = 0
+        }
+    }
+
+    Connections {
+        target: VideoLibrary
+
+        function onDriveConnected(name, path, count) {
+            notice.show(count === 0 ? qsTr("%1 connected  •  no videos found").arg(name)
+                      : count === 1 ? qsTr("%1 connected  •  1 video").arg(name)
+                      : qsTr("%1 connected  •  %2 videos").arg(name).arg(count), path);
+        }
+
+        function onDriveRemoved(path) {
+            // Back out of the drive's folders, which are now empty.
+            while (contentStack.depth > 1 && String(contentStack.currentItem.folder ?? "").startsWith(path))
+                contentStack.pop(StackView.Immediate);
+            if (notice.drivePath === path)
+                notice.opacity = 0;
         }
     }
 

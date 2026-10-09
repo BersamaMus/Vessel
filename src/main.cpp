@@ -6,10 +6,19 @@
 
 #include <clocale>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 int main(int argc, char *argv[])
 {
     // libmpv renders with OpenGL, so Qt Quick must use it too (not Direct3D).
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+
+#ifdef Q_OS_WIN
+    // Looking at an empty card reader must not pop up "Insert a disk" dialogs.
+    SetErrorMode(SEM_FAILCRITICALERRORS);
+#endif
 
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationName(QStringLiteral("BetterVideoPlayer"));

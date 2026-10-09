@@ -7,7 +7,7 @@ ScrollView {
     id: page
 
     readonly property var app: ApplicationWindow.window
-    readonly property bool hasVideos: VideoLibrary.count > 0
+    readonly property bool hasVideos: VideoLibrary.libraryCount > 0
     readonly property real cardWidth: 260
     readonly property real cardCellHeight: Math.round(cardWidth * 9 / 16) + 62
 
@@ -57,8 +57,8 @@ ScrollView {
             Layout.topMargin: 24
             iconName: "movie"
             text: VideoLibrary.scanning
-                  ? qsTr("Looking for videos in %1…").arg(VideoLibrary.rootPath)
-                  : qsTr("No videos found in %1. Add some, then choose Rescan library from the menu.").arg(VideoLibrary.rootPath)
+                  ? qsTr("Looking for videos in your library folders…")
+                  : qsTr("No videos found in your library folders. Choose which folders to use in Settings.")
         }
 
         // --- Continue watching -------------------------------------------

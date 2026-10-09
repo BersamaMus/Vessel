@@ -6,8 +6,9 @@ import QtQuick.Layouts
 ScrollView {
     id: page
 
+    // An absolute path, or "" for the whole library (a card per library folder).
     property string folder: ""
-    // The Library tab shows the root folder under the name "Library".
+    // The Library tab: the library folder (or all of them) under the name "Library".
     property bool isLibraryTab: false
 
     readonly property var app: ApplicationWindow.window
@@ -69,6 +70,14 @@ ScrollView {
                     font.pixelSize: 14
                 }
             }
+        }
+
+        EmptyNote {
+            visible: page.subfolders.count === 0 && page.videos.count === 0 && !VideoLibrary.scanning
+            Layout.topMargin: 24
+            iconName: "folder"
+            text: page.isLibraryTab ? qsTr("No videos in your library yet. Add folders in Settings.")
+                                    : qsTr("No videos in this folder.")
         }
 
         SectionLabel {
