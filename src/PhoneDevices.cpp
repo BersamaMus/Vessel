@@ -211,7 +211,9 @@ bool childIds(Device &device, const QString &parent, QStringList &ids)
     }
 }
 
-// Collects the results of a bulk property query.
+// Collects the results of a bulk property query. WPD holds on to it from its own threads
+// and may let go after the query has ended, so it's reference counted properly and
+// deletes itself when the last holder lets go (never on the stack).
 class BulkCallback : public IPortableDevicePropertiesBulkCallback
 {
 public:
@@ -219,9 +221,14 @@ public:
     HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     HRESULT result = E_PENDING;
 
-    ~BulkCallback() { CloseHandle(done); }
     ULONG STDMETHODCALLTYPE AddRef() override { return ++m_refs; }
-    ULONG STDMETHODCALLTYPE Release() override { return --m_refs; }   // lives on the stack
+    ULONG STDMETHODCALLTYPE Release() override
+    {
+        const ULONG left = --m_refs;
+        if (left == 0)
+            delete this;
+        return left;
+    }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
     {
         if (riid == IID_IUnknown || riid == IID_IPortableDevicePropertiesBulkCallback) {
@@ -252,6 +259,8 @@ public:
     }
 
 private:
+    ~BulkCallback() { CloseHandle(done); }   // through Release() only
+
     std::atomic<ULONG> m_refs = 1;
 };
 
@@ -277,14 +286,15 @@ QList<ComPtr<IPortableDeviceValues>> describe(Device &device, const QStringList 
             value.pwszVal = wide.back().data();
             list->Add(&value);   // copies it
         }
-        BulkCallback callback;
+        ComPtr<BulkCallback> callback;
+        callback.Attach(new BulkCallback);   // starts with our one reference
         GUID context{};
-        if (SUCCEEDED(bulk->QueueGetValuesByObjectList(list.Get(), keys.Get(), &callback, &context))
+        if (SUCCEEDED(bulk->QueueGetValuesByObjectList(list.Get(), keys.Get(), callback.Get(), &context))
             && SUCCEEDED(bulk->Start(context))) {
-            if (WaitForSingleObject(callback.done, 120'000) == WAIT_OBJECT_0 && SUCCEEDED(callback.result))
-                return callback.results;
+            if (WaitForSingleObject(callback->done, 120'000) == WAIT_OBJECT_0 && SUCCEEDED(callback->result))
+                return callback->results;
             bulk->Cancel(context);
-            WaitForSingleObject(callback.done, 5000);
+            WaitForSingleObject(callback->done, 5000);
         }
     }
 
