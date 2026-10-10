@@ -1,5 +1,7 @@
 #include "Thumbnailer.h"
 
+#include "PhoneDevices.h"
+
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDeadlineTimer>
@@ -87,6 +89,7 @@ GrabResult grabFrame(const QString &videoPath, const QString &outputFile, const 
         mpv_set_option_string(mpv, name, value);
 
     if (mpv_initialize(mpv) >= 0) {
+        Phones::registerStream(mpv);   // for mtp:// (videos on a phone)
         const QByteArray path = videoPath.toUtf8();
         const char *cmd[] = {"loadfile", path.constData(), nullptr};
         mpv_command(mpv, cmd);
@@ -156,11 +159,12 @@ int Thumbnailer::runWorker()
         const QByteArray line = in.readLine();
         if (line.isEmpty())
             return 0;
+        // "video<TAB>output", or with a third field, what to open instead of the video's path.
         const QList<QByteArray> fields = line.trimmed().split('\t');
-        if (fields.size() != 2)
+        if (fields.size() < 2)
             continue;
-        const QString video = QString::fromUtf8(fields[0]);
-        const GrabResult r = grabFrame(video, QString::fromUtf8(fields[1]), never);
+        const QString source = QString::fromUtf8(fields.size() > 2 ? fields[2] : fields[0]);
+        const GrabResult r = grabFrame(source, QString::fromUtf8(fields[1]), never);
         const QByteArray answer = fields[0] + '\t' + (r.ok ? "1" : "0") + '\t' + QByteArray::number(r.duration)
             + '\t' + QByteArray::number(r.width) + '\t' + QByteArray::number(r.height)
             + '\t' + QByteArray::number(r.year) + '\n';
@@ -197,14 +201,14 @@ Thumbnailer::~Thumbnailer()
     m_pool.waitForDone();
 }
 
-void Thumbnailer::request(const QString &videoPath, const QString &outputFile)
+void Thumbnailer::request(const QString &videoPath, const QString &outputFile, const QString &source)
 {
     if (m_queued.contains(videoPath))
         return;
     for (const Worker *worker : std::as_const(m_workers))
         if (worker->job.video == videoPath)
             return;
-    m_queue.append({videoPath, outputFile});
+    m_queue.append({videoPath, outputFile, source});
     m_queued.insert(videoPath);
     // Once for a whole library's worth of requests, made in one go.
     if (!std::exchange(m_dispatchPending, true)) {
@@ -221,27 +225,67 @@ void Thumbnailer::clear()
     m_queued.clear();
 }
 
+bool Thumbnailer::isPhoneJob(const Job &job)
+{
+    return job.source.startsWith(QLatin1String("mtp://"));
+}
+
+bool Thumbnailer::phoneJobRunning() const
+{
+    return m_phoneInProcess
+        || std::any_of(m_workers.begin(), m_workers.end(), [](const Worker *w) { return isPhoneJob(w->job); });
+}
+
+int Thumbnailer::takeableCount() const
+{
+    // A phone answers one request at a time: several grabs at once only get in each
+    // other's way, so its videos go one after another (alongside other jobs).
+    const bool phoneBusy = phoneJobRunning();
+    bool phoneWaiting = false;
+    int others = 0;
+    for (const Job &job : m_queue) {
+        if (isPhoneJob(job))
+            phoneWaiting = true;
+        else
+            ++others;
+    }
+    return others + (phoneWaiting && !phoneBusy ? 1 : 0);
+}
+
+bool Thumbnailer::takeNext(Job &job)
+{
+    const bool phoneBusy = phoneJobRunning();
+    for (qsizetype i = 0; i < m_queue.size(); ++i) {
+        if (phoneBusy && isPhoneJob(m_queue[i]))
+            continue;
+        job = m_queue.takeAt(i);
+        m_queued.remove(job.video);
+        return true;
+    }
+    return false;
+}
+
 void Thumbnailer::dispatch()
 {
+    Job job;
     if (m_workersFailed) {
-        while (!m_queue.isEmpty() && m_pool.activeThreadCount() < m_maxWorkers) {
-            const Job job = m_queue.takeFirst();
-            m_queued.remove(job.video);
+        while (m_pool.activeThreadCount() < m_maxWorkers && takeNext(job))
             grabInProcess(job);
-        }
         return;
     }
     for (Worker *worker : std::as_const(m_workers)) {
-        if (m_queue.isEmpty())
-            break;
         if (worker->job.video.isEmpty() && !worker->closing && worker->process->state() == QProcess::Running) {
-            const Job job = m_queue.takeFirst();
-            m_queued.remove(job.video);
+            if (!takeNext(job))
+                break;
             send(worker, job);
         }
     }
-    // More workers while there's more to do than the running ones are on.
-    while (!m_queue.isEmpty() && m_workers.size() < m_maxWorkers && !m_workersFailed)
+    // More workers while there's more that can be done than the ones starting up will take.
+    const auto starting = [this] {
+        return std::count_if(m_workers.begin(), m_workers.end(),
+                             [](const Worker *w) { return w->process->state() != QProcess::Running; });
+    };
+    while (m_workers.size() < m_maxWorkers && !m_workersFailed && takeableCount() > starting())
         startWorker();
 }
 
@@ -254,12 +298,11 @@ void Thumbnailer::startWorker()
     m_workers.append(worker);
 
     connect(worker->process, &QProcess::started, this, [this, worker] {
-        if (!m_queue.isEmpty()) {
-            const Job job = m_queue.takeFirst();
-            m_queued.remove(job.video);
+        Job job;
+        if (takeNext(job)) {
             send(worker, job);
         } else {
-            worker->closing = true;   // the others got through it first
+            worker->closing = true;   // the others got there first
             worker->process->closeWriteChannel();
         }
     });
@@ -280,7 +323,10 @@ void Thumbnailer::send(Worker *worker, const Job &job)
 {
     worker->job = job;
     worker->started.start();
-    worker->process->write(job.video.toUtf8() + '\t' + job.output.toUtf8() + '\n');
+    QByteArray line = job.video.toUtf8() + '\t' + job.output.toUtf8();
+    if (!job.source.isEmpty())
+        line += '\t' + job.source.toUtf8();
+    worker->process->write(line + '\n');
     m_watchdog.start();
 }
 
@@ -302,15 +348,15 @@ void Thumbnailer::onOutput(Worker *worker)
 
     if (!worker->job.video.isEmpty())
         return;
-    if (!m_queue.isEmpty()) {
-        const Job job = m_queue.takeFirst();
-        m_queued.remove(job.video);
+    Job job;
+    if (takeNext(job)) {
         send(worker, job);
     } else {
-        // Nothing left: the worker ends at end of input, taking its memory with it.
+        // Nothing (it can do) left: it ends at end of input, taking its memory with it.
         worker->closing = true;
         worker->process->closeWriteChannel();
     }
+    dispatch();   // a phone job may have just finished, letting the next one go
 }
 
 void Thumbnailer::onExited(Worker *worker)
@@ -351,13 +397,17 @@ void Thumbnailer::checkDeadlines()
 
 void Thumbnailer::grabInProcess(const Job &job)
 {
+    if (isPhoneJob(job))
+        m_phoneInProcess = true;
     m_pool.start([this, job] {
         if (m_stopping)
             return;
-        const GrabResult r = grabFrame(job.video, job.output, m_stopping);
+        const GrabResult r = grabFrame(job.source.isEmpty() ? job.video : job.source, job.output, m_stopping);
         if (m_stopping)
             return;
         QMetaObject::invokeMethod(this, [this, job, r] {
+            if (isPhoneJob(job))
+                m_phoneInProcess = false;
             emit finished(job.video, r.ok, r.duration, r.width, r.height, r.year);
             dispatch();
         });

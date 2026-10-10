@@ -30,7 +30,8 @@ public:
 
     // Saves a JPEG of `videoPath` to `outputFile`; emits finished() when done. Requests
     // run in the order made; one for a video that's already queued or being done is ignored.
-    void request(const QString &videoPath, const QString &outputFile);
+    // `source` is what to open instead of the path, if anything (a phone's mtp:// stream).
+    void request(const QString &videoPath, const QString &outputFile, const QString &source = {});
     // Drops queued requests (running ones still finish).
     void clear();
 
@@ -47,6 +48,7 @@ private:
     {
         QString video;
         QString output;
+        QString source;   // what libmpv opens, if not the video's path
     };
     struct Worker
     {
@@ -58,6 +60,12 @@ private:
     };
 
     void dispatch();
+    // The next job a free worker can take: the first in the queue, except that a phone's
+    // videos go one at a time. False if there's none it can take now.
+    bool takeNext(Job &job);
+    int takeableCount() const;
+    bool phoneJobRunning() const;
+    static bool isPhoneJob(const Job &job);
     void startWorker();
     void send(Worker *worker, const Job &job);
     void onOutput(Worker *worker);
@@ -71,6 +79,7 @@ private:
     int m_maxWorkers = 2;
     bool m_workersFailed = false;   // couldn't start one: grab in this process instead
     bool m_dispatchPending = false;
+    bool m_phoneInProcess = false;   // the fallback is grabbing from a phone
     QTimer m_watchdog;
 
     // The in-process fallback.

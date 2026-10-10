@@ -119,6 +119,25 @@ App data lives in `%LOCALAPPDATA%\BetterVideoPlayer`:
 
 Delete `metadata.json` and `thumbnails\` to rebuild the thumbnails.
 
+## Phones (Smartphone tab)
+
+A phone connected by USB doesn't get a drive letter: Android phones speak MTP (iPhones PTP),
+which Windows exposes through Windows Portable Devices. `PhoneDevices` checks for phones every
+two seconds, walks their folders (one bulk request per folder: about 6 s for 1,500 videos among
+20,000 files), and skips hidden folders and files (the bin's `.trashed-…` ones) and apps'
+private `Android/data` and `Android/obb`.
+
+Videos are played and thumbnailed **straight from the phone**, without copying: MTP's
+GetPartialObject64 reads any part of a file, and an `mtp://` stream protocol hands those reads
+to libmpv, so seeking works too (about 35 MB/s over USB). The phone answers one request at a
+time and turns others away as busy, so requests are retried for a few seconds, and only one
+thumbnail worker reads from a phone at once.
+
+Phone videos are listed as `mtp://<serial>/<path on the phone>`; watch history and thumbnails
+are keyed by the serial number and path, which stay the same across connections (MTP's object
+ids don't). The phone must be unlocked and, on Android, set to **File transfer**; until then its
+card says so. Windows only, for now.
+
 ## Architecture
 
 - **C++** (`src/`), registered as the `BetterVideoPlayer` QML module:
@@ -126,6 +145,7 @@ Delete `metadata.json` and `thumbnails\` to rebuild the thumbnails.
     draws through mpv's OpenGL render API. Qt Quick is forced onto OpenGL in `main.cpp`.
   - `VideoLibrary` (QML singleton): scanning, the metadata cache, watch history, and the models.
   - `VideoModel` / `FolderModel`: list models for shelves, folder pages and folder cards.
+  - `PhoneDevices`: phones over USB (Windows Portable Devices / MTP), and the `mtp://` stream.
   - `VideoQuery`: a `VideoModel` created in QML, with search text, sort and filter properties
     (behind `FilterBar` and `SearchPage`).
   - `Thumbnailer`: 2 to 4 worker processes (the app run as `BetterVideoPlayer --thumbnail-worker`),

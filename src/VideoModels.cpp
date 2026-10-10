@@ -313,8 +313,10 @@ QList<int> VideoQuery::find()
     QStringList types;
     for (int i = 0; i < lib->count(); ++i) {
         const VideoInfo &v = lib->video(i);
-        const bool inScope = m_folder.isEmpty() ? v.external == (m_source == QLatin1String("drives"))
-                                                : v.dir == m_folder || v.dir.startsWith(prefix);
+        const bool inScope = !m_folder.isEmpty() ? v.dir == m_folder || v.dir.startsWith(prefix)
+                           : m_source == QLatin1String("drives") ? v.external && !v.phone
+                           : m_source == QLatin1String("phones") ? v.phone
+                                                                  : !v.external;
         if (!inScope)
             continue;
         if (!types.contains(v.type))

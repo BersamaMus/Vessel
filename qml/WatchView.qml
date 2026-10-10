@@ -92,7 +92,7 @@ Item {
         subtitleCandidates = found;
         subtitleOffer = choice === undefined && found.length > 0 ? found[0] : "";
         const subtitles = choice ? [choice].concat(found.filter(file => file !== choice)) : [];
-        mpv.open(newPath, VideoLibrary.resumePosition(newPath), subtitles);
+        mpv.open(VideoLibrary.playbackUrl(newPath), VideoLibrary.resumePosition(newPath), subtitles);
         if (mode === "closed") {
             miniProgress = 0;
             fullProgress = 0;
@@ -514,7 +514,7 @@ Item {
                         topPadding: 4
                         hoverEnabled: true
                         focusPolicy: Qt.NoFocus
-                        visible: watch.path !== ""
+                        visible: watch.path !== "" && !watch.details.phone   // a phone has no folder here to show
                         onClicked: VideoLibrary.showInFileManager(watch.path)
 
                         ToolTip.visible: hovered
@@ -628,6 +628,7 @@ Item {
                     Layout.leftMargin: 8
                     visible: watch.suggestions !== null && watch.suggestions.count > 0
                     text: watch.queue === null || watch.queue.count <= 1 ? qsTr("Up next")
+                        : watch.details.phone ? qsTr("More videos from this phone")
                         : watch.details.external ? qsTr("More videos from this drive") : qsTr("More videos")
                     color: Theme.textPrimary
                     font.pixelSize: 16

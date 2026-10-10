@@ -85,6 +85,7 @@ set(QML_FILES
     qml/PageBar.qml
     qml/WatchView.qml
     qml/ExternalPage.qml
+    qml/PhonePage.qml
     qml/SettingsPage.qml
 )
 set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -103,11 +104,14 @@ qt_add_qml_module(BetterVideoPlayer
         src/VideoLibrary.cpp src/VideoLibrary.h
         src/VideoModels.cpp src/VideoModels.h
         src/DriveWatcher.cpp src/DriveWatcher.h
+        src/PhoneDevices.cpp src/PhoneDevices.h
 )
 
 target_include_directories(BetterVideoPlayer PRIVATE src)
 if(WIN32)
     target_compile_definitions(BetterVideoPlayer PRIVATE NOMINMAX)
+    # Phones over USB (MTP): Windows Portable Devices.
+    target_link_libraries(BetterVideoPlayer PRIVATE PortableDeviceGUIDs ole32 oleaut32)
 endif()
 target_link_libraries(BetterVideoPlayer PRIVATE Qt6::Concurrent Qt6::OpenGL Qt6::Quick mpv::mpv)
 target_compile_definitions(BetterVideoPlayer PRIVATE PROJECT_VERSION="${PROJECT_VERSION}")

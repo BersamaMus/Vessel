@@ -10,6 +10,8 @@
 #include <QQuickOpenGLUtils>
 #include <QTimeZone>
 
+#include "PhoneDevices.h"
+
 // "2 Jan 2022, 2:16 PM" (VideoModels.cpp; its header needs the whole library).
 QString formatDateTime(const QDateTime &time);
 
@@ -157,6 +159,8 @@ MpvItem::MpvItem(QQuickItem *parent)
 
     if (mpv_initialize(m_mpv) < 0)
         qFatal("Could not initialize mpv");
+    // mtp:// streams videos straight from a phone (see VideoLibrary::playbackUrl).
+    Phones::registerStream(m_mpv);
 
     mpv_observe_property(m_mpv, 0, "time-pos", MPV_FORMAT_DOUBLE);
     mpv_observe_property(m_mpv, 0, "duration", MPV_FORMAT_DOUBLE);

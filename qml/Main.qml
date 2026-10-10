@@ -48,6 +48,8 @@ ApplicationWindow {
         let scope = "library";
         if (rail.currentIndex === 2)
             scope = VideoLibrary.driveOf(current.folder ?? "") || "drives";
+        else if (rail.currentIndex === 3)
+            scope = VideoLibrary.driveOf(current.folder ?? "") || "phones";
         contentStack.push(searchPage, { scope: scope });
     }
 
@@ -70,21 +72,21 @@ ApplicationWindow {
         settings.recentSearches = JSON.stringify(recentSearches.filter(s => s !== text));
     }
 
-    // 0 Home, 1 Library, 2 External, 3 Settings, as in the rail.
+    // 0 Home, 1 Library, 2 External, 3 Smartphone, 4 Settings, as in the rail.
     function showTab(index) {
         rail.currentIndex = index;
-        contentStack.replace(null, [homePage, libraryPage, externalPage, settingsPage][index]);
+        contentStack.replace(null, [homePage, libraryPage, externalPage, phonePage, settingsPage][index]);
     }
 
     function showLibrary() {
         showTab(1);
     }
 
-    // A drive's folder, from the "connected" notice.
+    // A drive's (or phone's) videos, from the "connected" notice.
     function openDrive(path) {
         if (watch.mode === "watch" || watch.mode === "full")
             watch.minimize();
-        showTab(2);
+        showTab(VideoLibrary.isPhone(path) ? 3 : 2);
         openFolder(path);
     }
 
@@ -230,6 +232,10 @@ ApplicationWindow {
         ExternalPage {}
     }
     Component {
+        id: phonePage
+        PhonePage {}
+    }
+    Component {
         id: settingsPage
         SettingsPage {}
     }
@@ -350,14 +356,17 @@ ApplicationWindow {
             window.toast(count === 0 ? qsTr("%1 connected  •  no videos found").arg(name)
                        : count === 1 ? qsTr("%1 connected  •  1 video").arg(name)
                        : qsTr("%1 connected  •  %2 videos").arg(name).arg(count),
-                         { icon: "usb", actionText: qsTr("Open"), action: () => window.openDrive(path), duration: 7000 });
+                         { icon: VideoLibrary.isPhone(path) ? "smartphone" : "usb", actionText: qsTr("Open"),
+                           action: () => window.openDrive(path), duration: 7000 });
         }
 
         function onDriveRemoved(path, name) {
             // Back out of the drive's folders, which are now empty.
             while (contentStack.depth > 1 && String(contentStack.currentItem.folder ?? "").startsWith(path))
                 contentStack.pop(StackView.Immediate);
-            window.toast(qsTr("%1 removed").arg(name), { icon: "usb" });
+            const phone = VideoLibrary.isPhone(path);
+            window.toast(phone ? qsTr("%1 disconnected").arg(name) : qsTr("%1 removed").arg(name),
+                         { icon: phone ? "smartphone" : "usb" });
         }
 
         function onRescanFinished(count, added, removed) {
