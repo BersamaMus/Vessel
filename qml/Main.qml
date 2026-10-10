@@ -65,9 +65,9 @@ ApplicationWindow {
     // Removing a library folder can be undone from the notice.
     function removeLibraryFolder(path) {
         const name = VideoLibrary.folderName(path);
-        VideoLibrary.removeLibraryFolder(path);
+        const position = VideoLibrary.removeLibraryFolder(path);
         toast(qsTr("Removed %1 from your library").arg(name),
-              { icon: "folder", actionText: qsTr("Undo"), action: () => VideoLibrary.addLibraryFolder(path), duration: 8000 });
+              { icon: "folder", actionText: qsTr("Undo"), action: () => VideoLibrary.addLibraryFolder(path, position), duration: 8000 });
     }
 
     function openFileDialog() {
