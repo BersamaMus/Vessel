@@ -5,9 +5,10 @@ import QtQuick.Layouts
 // One folder of the library: its sub-folders, then its videos, in grids. Sorting
 // (other than by name) or filtering lists every video in it, sub-folders included.
 //
-// The videos are the cells of a GridView, which only makes the cards on screen, so
-// a drive with thousands of videos stays quick; everything above them is its header.
-GridView {
+// The title, buttons and filters stay at the top while the rest scrolls. The videos
+// are the cells of a GridView, which only makes the cards on screen, so a drive with
+// thousands of videos stays quick; the folders and shelves above them are its header.
+Item {
     id: page
 
     // An absolute path, or "" for the whole library (a card per library folder).
@@ -31,11 +32,6 @@ GridView {
     readonly property bool flat: results.sort !== "name" || filtered
 
     clip: true
-    cellWidth: Math.floor(gridWidth / columns)
-    cellHeight: Math.round(cardWidth * 9 / 16) + 52 + gap
-    model: flat ? results : videos
-    boundsBehavior: Flickable.StopAtBounds
-    ScrollBar.vertical: ScrollBar {}
     // The thumbnails on show are made first.
     StackView.onActivated: VideoLibrary.prioritize(folder)
 
@@ -53,170 +49,198 @@ GridView {
         font.weight: Font.Bold
     }
 
-    delegate: Item {
-        id: cell
-        required property var model
-        width: page.cellWidth
-        height: page.cellHeight
-
-        VideoCard {
-            x: Theme.pagePadding
-            width: page.cardWidth
-            title: cell.model.title
-            // Sorted or filtered: what it's sorted by, or how far in, or else where it is.
-            subtitle: page.flat ? [cell.model.detail, cell.model.remainingText].filter(part => part).join("  •  ")
-                                  || cell.model.subtitle
-                                : cell.model.remainingText
-            thumbnail: cell.model.thumbnail
-            loading: cell.model.thumbnailPending
-            durationText: cell.model.durationText
-            progress: cell.model.progress
-            onClicked: page.app.play(cell.model.path)
-        }
-    }
-
-    footer: Item { width: page.width; height: 32 }
-
-    header: ColumnLayout {
-        width: page.width
+    ColumnLayout {
+        anchors.fill: parent
         spacing: 0
 
-        RowLayout {
+        PageBar {
             Layout.fillWidth: true
-            Layout.leftMargin: page.StackView.index > 0 ? 8 : Theme.pagePadding
-            Layout.rightMargin: Theme.pagePadding
-            Layout.topMargin: 14
-            spacing: 8
+            scrolled: !grid.atYBeginning
 
-            IconButton {
-                visible: page.StackView.index > 0
-                Layout.alignment: Qt.AlignTop
-                iconName: "back"
-                tip: qsTr("Back")
-                onClicked: page.StackView.view.pop()
-            }
-
-            ColumnLayout {
+            RowLayout {
                 Layout.fillWidth: true
-                spacing: 2
+                Layout.leftMargin: page.StackView.index > 0 ? 8 : Theme.pagePadding
+                Layout.rightMargin: Theme.pagePadding
+                Layout.topMargin: 14
+                spacing: 8
 
-                Text {
-                    Layout.fillWidth: true
-                    text: page.isLibraryTab ? qsTr("Library") : VideoLibrary.folderName(page.folder)
-                    color: Theme.textPrimary
-                    font.pixelSize: 26
-                    font.weight: Font.ExtraBold
-                    font.letterSpacing: -0.5
-                    elide: Text.ElideRight
+                IconButton {
+                    visible: page.StackView.index > 0
+                    Layout.alignment: Qt.AlignTop
+                    iconName: "back"
+                    tip: qsTr("Back")
+                    onClicked: page.StackView.view.pop()
                 }
-                Text {
-                    text: {
-                        const n = VideoLibrary.count >= 0 ? VideoLibrary.videoCountIn(page.folder) : 0;
-                        return n === 1 ? qsTr("1 video") : qsTr("%1 videos").arg(n);
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: page.isLibraryTab ? qsTr("Library") : VideoLibrary.folderName(page.folder)
+                        color: Theme.textPrimary
+                        font.pixelSize: 26
+                        font.weight: Font.ExtraBold
+                        font.letterSpacing: -0.5
+                        elide: Text.ElideRight
                     }
-                    color: Theme.textSecondary
-                    font.pixelSize: 14
+                    Text {
+                        text: {
+                            const n = VideoLibrary.count >= 0 ? VideoLibrary.videoCountIn(page.folder) : 0;
+                            return n === 1 ? qsTr("1 video") : qsTr("%1 videos").arg(n);
+                        }
+                        color: Theme.textSecondary
+                        font.pixelSize: 14
+                    }
+                    WorkProgress {
+                        Layout.fillWidth: true
+                        Layout.topMargin: 6
+                        folder: page.folder
+                    }
                 }
-                WorkProgress {
-                    Layout.fillWidth: true
-                    Layout.topMargin: 6
-                    folder: page.folder
+
+                IconButton {
+                    Layout.alignment: Qt.AlignTop
+                    iconName: "search"
+                    tip: qsTr("Search (Ctrl+F)")
+                    onClicked: page.app.openSearch()
                 }
             }
 
-            IconButton {
-                Layout.alignment: Qt.AlignTop
-                iconName: "search"
-                tip: qsTr("Search (Ctrl+F)")
-                onClicked: page.app.openSearch()
+            FilterBar {
+                Layout.fillWidth: true
+                Layout.leftMargin: Theme.pagePadding
+                Layout.rightMargin: Theme.pagePadding
+                Layout.topMargin: 16
+                visible: results.types.length > 0
+                query: results
             }
         }
 
-        FilterBar {
+        GridView {
+            id: grid
+
             Layout.fillWidth: true
-            Layout.leftMargin: Theme.pagePadding
-            Layout.rightMargin: Theme.pagePadding
-            Layout.topMargin: 16
-            visible: results.types.length > 0
-            query: results
-        }
+            Layout.fillHeight: true
+            clip: true
+            cellWidth: Math.floor(page.gridWidth / page.columns)
+            cellHeight: Math.round(page.cardWidth * 9 / 16) + 52 + page.gap
+            model: page.flat ? results : page.videos
+            boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.vertical: ScrollBar {}
 
-        EmptyNote {
-            visible: !page.flat && page.subfolders.count === 0 && page.videos.count === 0 && !VideoLibrary.scanning
-            Layout.topMargin: 24
-            iconName: "folder"
-            text: page.isLibraryTab ? qsTr("No videos in your library yet. Add folders in Settings.")
-                                    : qsTr("No videos in this folder.")
-        }
-
-        // --- Sorted or filtered ------------------------------------------
-        SectionLabel {
-            visible: page.flat && results.count > 0
-            text: results.count === 1 ? qsTr("1 video") : qsTr("%1 videos").arg(results.count)
-        }
-
-        EmptyNote {
-            visible: page.flat && results.count === 0
-            Layout.topMargin: 24
-            iconName: "search"
-            text: qsTr("No videos here match these filters.")
-        }
-
-        // --- Folders, then videos -----------------------------------------
-        SectionLabel {
-            visible: !page.flat && page.started !== null && page.started.count > 0
-            text: qsTr("Continue watching")
-        }
-
-        Shelf {
-            Layout.fillWidth: true
-            visible: !page.flat && page.started !== null && page.started.count > 0
-            model: page.started
-            cellWidth: 276
-            cellHeight: Math.round(260 * 9 / 16) + 62
-            arrowCenterY: 260 * 9 / 32
-            delegate: VideoCard {
+            delegate: Item {
+                id: cell
                 required property var model
-                width: 260
-                title: model.title
-                subtitle: model.remainingText
-                thumbnail: model.thumbnail
-                loading: model.thumbnailPending
-                durationText: model.durationText
-                progress: model.progress
-                onClicked: page.app.play(model.path)
-            }
-        }
+                width: grid.cellWidth
+                height: grid.cellHeight
 
-        SectionLabel {
-            visible: !page.flat && page.subfolders.count > 0
-            text: qsTr("Folders")
-        }
-
-        Flow {
-            Layout.fillWidth: true
-            Layout.leftMargin: Theme.pagePadding
-            Layout.rightMargin: Theme.pagePadding
-            visible: !page.flat && page.subfolders.count > 0
-            spacing: page.gap
-
-            Repeater {
-                model: page.subfolders
-                delegate: FolderCard {
-                    required property var model
+                VideoCard {
+                    x: Theme.pagePadding
                     width: page.cardWidth
-                    name: model.name
-                    countText: model.countText
-                    thumbnail: model.thumbnail
-                    loading: model.thumbnailPending
-                    onClicked: page.app.openFolder(model.folder)
+                    title: cell.model.title
+                    // Sorted or filtered: what it's sorted by, or how far in, or else where it is.
+                    subtitle: page.flat ? [cell.model.detail, cell.model.remainingText].filter(part => part).join("  •  ")
+                                          || cell.model.subtitle
+                                        : cell.model.remainingText
+                    thumbnail: cell.model.thumbnail
+                    loading: cell.model.thumbnailPending
+                    durationText: cell.model.durationText
+                    progress: cell.model.progress
+                    onClicked: page.app.play(cell.model.path)
                 }
             }
-        }
 
-        SectionLabel {
-            visible: !page.flat && page.videos.count > 0
-            text: qsTr("Videos")
+            footer: Item { width: grid.width; height: 32 }
+
+            header: ColumnLayout {
+                width: grid.width
+                spacing: 0
+
+                EmptyNote {
+                    visible: !page.flat && page.subfolders.count === 0 && page.videos.count === 0 && !VideoLibrary.scanning
+                    Layout.topMargin: 12
+                    iconName: "folder"
+                    text: page.isLibraryTab ? qsTr("No videos in your library yet. Add folders in Settings.")
+                                            : qsTr("No videos in this folder.")
+                }
+
+                // --- Sorted or filtered ------------------------------------------
+                SectionLabel {
+                    visible: page.flat && results.count > 0
+                    Layout.topMargin: 12
+                    text: results.count === 1 ? qsTr("1 video") : qsTr("%1 videos").arg(results.count)
+                }
+
+                EmptyNote {
+                    visible: page.flat && results.count === 0
+                    Layout.topMargin: 12
+                    iconName: "search"
+                    text: qsTr("No videos here match these filters.")
+                }
+
+                // --- Folders, then videos -----------------------------------------
+                SectionLabel {
+                    visible: !page.flat && page.started !== null && page.started.count > 0
+                    Layout.topMargin: 12
+                    text: qsTr("Continue watching")
+                }
+
+                Shelf {
+                    Layout.fillWidth: true
+                    visible: !page.flat && page.started !== null && page.started.count > 0
+                    model: page.started
+                    cellWidth: 276
+                    cellHeight: Math.round(260 * 9 / 16) + 62
+                    arrowCenterY: 260 * 9 / 32
+                    delegate: VideoCard {
+                        required property var model
+                        width: 260
+                        title: model.title
+                        subtitle: model.remainingText
+                        thumbnail: model.thumbnail
+                        loading: model.thumbnailPending
+                        durationText: model.durationText
+                        progress: model.progress
+                        onClicked: page.app.play(model.path)
+                    }
+                }
+
+                SectionLabel {
+                    visible: !page.flat && page.subfolders.count > 0
+                    // The first section sits closer under the pinned bar.
+                    Layout.topMargin: page.started !== null && page.started.count > 0 ? 24 : 12
+                    text: qsTr("Folders")
+                }
+
+                Flow {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: Theme.pagePadding
+                    Layout.rightMargin: Theme.pagePadding
+                    visible: !page.flat && page.subfolders.count > 0
+                    spacing: page.gap
+
+                    Repeater {
+                        model: page.subfolders
+                        delegate: FolderCard {
+                            required property var model
+                            width: page.cardWidth
+                            name: model.name
+                            countText: model.countText
+                            thumbnail: model.thumbnail
+                            loading: model.thumbnailPending
+                            onClicked: page.app.openFolder(model.folder)
+                        }
+                    }
+                }
+
+                SectionLabel {
+                    visible: !page.flat && page.videos.count > 0
+                    Layout.topMargin: page.subfolders.count > 0 || (page.started !== null && page.started.count > 0) ? 24 : 12
+                    text: qsTr("Videos")
+                }
+            }
         }
     }
 }
