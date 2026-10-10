@@ -82,7 +82,7 @@ class VideoQuery : public VideoModel, public QQmlParserStatus
 
     // An absolute folder, or "" for the library as a whole.
     Q_PROPERTY(QString folder READ folder WRITE setFolder NOTIFY queryChanged)
-    // With folder "": "library" (the default) or "drives" (every connected drive).
+    // With folder "": "library" (the default), "drives" (every connected drive) or "phones".
     Q_PROPERTY(QString source READ source WRITE setSource NOTIFY queryChanged)
     // Matched against titles, then folder names; "" matches everything.
     Q_PROPERTY(QString text READ text WRITE setText NOTIFY queryChanged)

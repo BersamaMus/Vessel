@@ -10,13 +10,14 @@ import QtQuick.Layouts
 FocusScope {
     id: page
 
-    // Where to search: "library", "drives" (every connected drive), or one drive's path.
+    // Where to search: "library", "drives" (every connected drive), "phones", or one drive's (or phone's) path.
     property string scope: "library"
-    readonly property bool oneDrive: scope !== "library" && scope !== "drives"
+    readonly property bool oneDrive: scope !== "library" && scope !== "drives" && scope !== "phones"
     // Set for one drive, so the page closes with the rest of the drive's pages when it's unplugged.
     readonly property string folder: oneDrive ? scope : ""
     readonly property string scopeName: oneDrive ? VideoLibrary.folderName(scope)
-                                       : scope === "drives" ? qsTr("your drives") : qsTr("your library")
+                                       : scope === "drives" ? qsTr("your drives")
+                                       : scope === "phones" ? qsTr("your phones") : qsTr("your library")
 
     readonly property var app: ApplicationWindow.window
     readonly property string query: field.text.trim()
@@ -42,7 +43,7 @@ FocusScope {
     VideoQuery {
         id: results
         folder: page.folder
-        source: page.scope === "drives" ? "drives" : "library"
+        source: page.scope === "drives" || page.scope === "phones" ? page.scope : "library"
         sort: "relevance"
         text: page.query
     }

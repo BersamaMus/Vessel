@@ -15,6 +15,7 @@
 #include <atomic>
 #include <memory>
 
+#include "PhoneDevices.h"
 #include "VideoModels.h"
 
 class DriveWatcher;
@@ -37,6 +38,10 @@ struct VideoInfo
     QString root;       // the library folder or drive it was found under
     QString type;       // the file extension, lowercase: "mp4"
     bool external = false;
+    // On a phone (and external): `path` is "mtp://<serial>/DCIM/Camera/…", and it's read
+    // through its MTP object id (see PhoneDevices) rather than as a file.
+    bool phone = false;
+    QString objectId;
     qint64 size = 0;
     QDateTime modified;
     QDateTime added;
@@ -64,14 +69,16 @@ struct VideoMeta
     bool probed = false;   // looked at since sizes were kept (older caches lack them)
 };
 
-// Where videos come from: a library folder, or a connected external drive.
+// Where videos come from: a library folder, a connected external drive, or a phone
+// (also external; its path is "mtp://<serial>").
 struct VideoSource
 {
     QString path;
     QString name;
     bool external = false;
-    QString driveId;
-    QString kind;           // drives: "usb" or "card"
+    bool phone = false;
+    QString driveId;        // phones: the serial number
+    QString kind;           // drives: "usb" or "card"; phones: "phone"
     qint64 bytesTotal = 0;
     qint64 bytesFree = 0;
     bool scanning = false;
@@ -105,6 +112,9 @@ class VideoLibrary : public QObject
     Q_PROPERTY(int thumbnailsTotal READ thumbnailsTotal NOTIFY progressChanged)
     // Connected drives: {path, name, kind, count, scanning, found, sizeText, freeText, usedFraction}.
     Q_PROPERTY(QVariantList drives READ drives NOTIFY drivesChanged)
+    // Connected phones, the same, plus ready: false (and no path) for one that's locked or
+    // only charging, whose videos can't be seen yet.
+    Q_PROPERTY(QVariantList phones READ phones NOTIFY drivesChanged)
     Q_PROPERTY(VideoModel *continueWatching READ continueWatching CONSTANT)
     Q_PROPERTY(VideoModel *recentlyAdded READ recentlyAdded CONSTANT)
     Q_PROPERTY(VideoModel *quickPicks READ quickPicks CONSTANT)
@@ -123,6 +133,7 @@ public:
     QStringList libraryFolders() const;
     QString libraryHome() const;
     QVariantList drives() const;
+    QVariantList phones() const;
     VideoModel *continueWatching() const { return m_continueWatching; }
     VideoModel *recentlyAdded() const { return m_recentlyAdded; }
     VideoModel *quickPicks() const { return m_quickPicks; }
@@ -144,8 +155,12 @@ public:
     // Started, unfinished videos on one drive, most recently watched first.
     Q_INVOKABLE VideoModel *continueWatchingOn(const QString &drivePath);
     Q_INVOKABLE bool isDrive(const QString &folder) const;
-    // The connected drive a folder is on ("E:/"), or "" if it isn't on one.
+    // The connected drive (or phone) a folder is on ("E:/"), or "" if it isn't on one.
     Q_INVOKABLE QString driveOf(const QString &folder) const;
+    // Whether a folder or video is on a phone.
+    Q_INVOKABLE bool isPhone(const QString &path) const { return path.startsWith(QLatin1String("mtp://")); }
+    // What the player opens for a video: its path, or for one on a phone, a stream from it.
+    Q_INVOKABLE QString playbackUrl(const QString &path) const;
     Q_INVOKABLE QString folderName(const QString &folder) const;
     // Thumbnails for the videos in a folder (sub-folders included): {done, total}, both
     // 0 when none are being made.
@@ -158,7 +173,7 @@ public:
 
     Q_INVOKABLE QString titleOf(const QString &path) const;
     // For the watch page: title, folder, folderLabel, fileName, sizeText, addedText, modifiedText,
-    // inLibrary, external.
+    // inLibrary, external, phone.
     Q_INVOKABLE QVariantMap detailsOf(const QString &path) const;
     Q_INVOKABLE QString folderOf(const QString &path) const;
     // The video after this one in its folder, or "" at the end.
@@ -218,6 +233,10 @@ private:
     void scanSource(const QString &path);
     void onScanFinished(const QString &path, QList<VideoInfo> videos);
     void onDrivesChanged();
+    // Phones: looked for every couple of seconds (off the UI thread), and taken in or let
+    // go like drives as they're connected, unlocked, or unplugged.
+    void pollPhones();
+    void onPhonesChanged(const QList<Phones::Phone> &phones);
     void rebuild();
     void onThumbnailFinished(const QString &path, bool ok, double duration, int width, int height, int year);
     void queueThumbnails();
@@ -265,6 +284,9 @@ private:
     QTimer m_saveTimer;
 
     DriveWatcher *m_driveWatcher = nullptr;
+    QTimer m_phoneTimer;
+    bool m_pollingPhones = false;
+    QList<Phones::Phone> m_phones;   // connected, ready or not
     Thumbnailer *m_thumbnailer = nullptr;
     VideoModel *m_continueWatching = nullptr;
     VideoModel *m_recentlyAdded = nullptr;
