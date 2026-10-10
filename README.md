@@ -83,6 +83,12 @@ downloads, are skipped). For each video, a headless libmpv instance grabs a fram
 and reads the duration, size in pixels and any release-date tag. All are cached, so later
 launches are instant.
 
+Background work shows as it happens. A ring at the bottom of the side rail spins while folders
+and drives are scanned, then fills as thumbnails are made (hover it for counts). Drive cards and
+folder pages show "Making thumbnails • 124 of 830" for their own videos, and cards waiting for a
+thumbnail pulse. The folder you're looking at is done first: its own videos, then a cover for
+each sub-folder, then the rest.
+
 Every Library and folder page has a **sort** menu (Name, Recently added, Recently watched,
 Release year, Longest first, Largest first) and **filters** (Length, Progress, Type, Resolution).
 Sorting by anything but Name, or filtering, lists every video in the folder and its sub-folders
@@ -113,8 +119,9 @@ Delete `metadata.json` and `thumbnails\` to rebuild the thumbnails.
   - `VideoModel` / `FolderModel`: list models for shelves, folder pages and folder cards.
   - `VideoQuery`: a `VideoModel` created in QML, with search text, sort and filter properties
     (behind `FilterBar` and `SearchPage`).
-  - `Thumbnailer`: a two-thread pool of headless libmpv instances (`vo=image`).
+  - `Thumbnailer`: a small thread pool (2 to 4) of headless libmpv instances (`vo=image`).
 - **QML** (`qml/`): `Main` (window, navigation), `HomePage`, `FolderPage`, `WatchView` (the player layer), and
   components (`Shelf`, `VideoCard`, `FolderCard`, `PickRow`, `NavRail`, ...). Colours and radii
   live in `Theme.qml`. Icons are Material Icons (Apache 2.0) path data in `Icons.js`, drawn with
-  `QtQuick.Shapes` so they take any colour.
+  `QtQuick.Shapes` so they take any colour. Lists that can hold thousands of videos (folder
+  pages, search results) are `GridView`s, which only create the cards on screen.

@@ -608,6 +608,7 @@ Item {
                             title: model.title
                             subtitle: model.durationText
                             thumbnail: model.thumbnail
+                            loading: model.thumbnailPending
                             durationText: model.durationText
                             progress: current ? 0 : model.progress
                             onClicked: watch.open(model.path)
@@ -637,6 +638,7 @@ Item {
                         title: model.title
                         subtitle: model.subtitle
                         thumbnail: model.thumbnail
+                        loading: model.thumbnailPending
                         durationText: model.durationText
                         progress: model.progress
                         onClicked: watch.open(model.path)

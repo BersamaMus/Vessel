@@ -90,6 +90,7 @@ ScrollView {
                 title: model.title
                 subtitle: model.remainingText
                 thumbnail: model.thumbnail
+                loading: model.thumbnailPending
                 durationText: model.durationText
                 progress: model.progress
                 onClicked: page.app.play(model.path)
@@ -133,6 +134,7 @@ ScrollView {
                 title: model.title
                 subtitle: model.durationText !== "" ? model.subtitle + "  •  " + model.durationText : model.subtitle
                 thumbnail: model.thumbnail
+                loading: model.thumbnailPending
                 progress: model.progress
                 onClicked: page.app.play(model.path)
             }
@@ -157,6 +159,7 @@ ScrollView {
                 title: model.title
                 subtitle: model.subtitle
                 thumbnail: model.thumbnail
+                loading: model.thumbnailPending
                 durationText: model.durationText
                 progress: model.progress
                 onClicked: page.app.play(model.path)
@@ -184,6 +187,7 @@ ScrollView {
                 name: model.name
                 countText: model.countText
                 thumbnail: model.thumbnail
+                loading: model.thumbnailPending
                 onClicked: page.app.openFolder(model.folder)
             }
         }

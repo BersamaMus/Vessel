@@ -140,6 +140,10 @@ void VideoModel::attach(VideoLibrary *library, Source source)
     m_library = library;
     m_source = std::move(source);
     connect(library, &VideoLibrary::videoChanged, this, &VideoModel::onVideoChanged);
+    connect(library, &VideoLibrary::thumbnailsQueued, this, [this] {
+        if (!m_rows.isEmpty())
+            emit dataChanged(index(0), index(m_rows.size() - 1), {ThumbnailPendingRole});
+    });
     refresh();
 }
 
@@ -199,6 +203,8 @@ QVariant VideoModel::data(const QModelIndex &index, int role) const
         return v.finished;
     case DetailRole:
         return detailOf(v);
+    case ThumbnailPendingRole:
+        return !v.hasThumbnail && m_library->thumbnailPending(v.path);
     default:
         return {};
     }
@@ -217,6 +223,7 @@ QHash<int, QByteArray> VideoModel::roleNames() const
         {RemainingTextRole, "remainingText"},
         {FinishedRole, "finished"},
         {DetailRole, "detail"},
+        {ThumbnailPendingRole, "thumbnailPending"},
     };
 }
 
@@ -388,10 +395,12 @@ FolderModel::FolderModel(VideoLibrary *library, const QString &parentFolder, Mod
     , m_mode(mode)
 {
     // Covers fill in as thumbnails are made.
-    connect(library, &VideoLibrary::videoChanged, this, [this] {
+    const auto coversChanged = [this] {
         if (!m_entries.isEmpty())
-            emit dataChanged(index(0), index(m_entries.size() - 1), {ThumbnailRole});
-    });
+            emit dataChanged(index(0), index(m_entries.size() - 1), {ThumbnailRole, ThumbnailPendingRole});
+    };
+    connect(library, &VideoLibrary::videoChanged, this, coversChanged);
+    connect(library, &VideoLibrary::thumbnailsQueued, this, coversChanged);
     refresh();
 }
 
@@ -476,6 +485,12 @@ QVariant FolderModel::data(const QModelIndex &index, int role) const
         return entry.count == 1 ? tr("1 video") : tr("%1 videos").arg(entry.count);
     case ThumbnailRole:
         return entry.cover >= 0 ? m_library->thumbnailUrl(entry.cover) : QUrl();
+    case ThumbnailPendingRole: {
+        if (entry.cover < 0)
+            return false;
+        const VideoInfo &cover = m_library->video(entry.cover);
+        return !cover.hasThumbnail && m_library->thumbnailPending(cover.path);
+    }
     default:
         return {};
     }
@@ -489,5 +504,6 @@ QHash<int, QByteArray> FolderModel::roleNames() const
         {CountRole, "count"},
         {CountTextRole, "countText"},
         {ThumbnailRole, "thumbnail"},
+        {ThumbnailPendingRole, "thumbnailPending"},
     };
 }

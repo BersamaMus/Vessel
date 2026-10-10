@@ -93,19 +93,26 @@ std::pair<int, int> episodeOf(const QString &name)
 }
 
 // The year in a name: "Speed (1994)", "Ne Zha 2019 1080p" or "Capture 2025-04-23"; 0 if
-// none. Not a resolution ("1920x1080", "1080p"). With several, the last one: "Blade Runner
-// 2049 (2017)" is from 2017.
+// none. Not a resolution ("1920x1080", "1080p"), part of an ID ("22ed0772-2042-44b9-…")
+// or in the future. With several, the last one: "Blade Runner 2049 (2017)" is from 2017.
 int yearIn(const QString &name)
 {
+    static const QRegularExpression guid(QStringLiteral("[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}"),
+                                         QRegularExpression::CaseInsensitiveOption);
     static const QRegularExpression pattern(QStringLiteral("(?<![\\dx])(19[2-9]\\d|20[0-4]\\d)(?![\\dpx])"),
                                             QRegularExpression::CaseInsensitiveOption);
+    const int latest = QDate::currentDate().year() + 1;
     int year = 0;
-    for (const QRegularExpressionMatch &match : pattern.globalMatch(name))
-        year = match.captured(1).toInt();
+    for (const QRegularExpressionMatch &match : pattern.globalMatch(QString(name).remove(guid))) {
+        const int found = match.captured(1).toInt();
+        if (found <= latest)
+            year = found;
+    }
     return year;
 }
 
-QList<VideoInfo> scanFolder(const QString &root, bool external, const QString &driveId)
+QList<VideoInfo> scanFolder(const QString &root, bool external, const QString &driveId,
+                            std::shared_ptr<std::atomic_int> found)
 {
     QList<VideoInfo> videos;
     const QString prefix = withSlash(root);
@@ -132,6 +139,7 @@ QList<VideoInfo> scanFolder(const QString &root, bool external, const QString &d
         const QDateTime born = file.birthTime();
         video.added = born.isValid() ? born : video.modified;
         videos.append(video);
+        ++*found;
     }
 
     QCollator collator;
@@ -162,6 +170,13 @@ VideoLibrary::VideoLibrary(QObject *parent)
     m_saveTimer.setSingleShot(true);
     m_saveTimer.setInterval(2000);
     connect(&m_saveTimer, &QTimer::timeout, this, &VideoLibrary::save);
+
+    m_scanProgressTimer.setInterval(400);
+    connect(&m_scanProgressTimer, &QTimer::timeout, this, [this] {
+        emit progressChanged();
+        if (std::any_of(m_sources.begin(), m_sources.end(), [](const VideoSource &s) { return s.external && s.scanning; }))
+            emit drivesChanged();
+    });
 
     m_thumbnailer = new Thumbnailer(this);
     connect(m_thumbnailer, &Thumbnailer::finished, this, &VideoLibrary::onThumbnailFinished);
@@ -263,6 +278,7 @@ QVariantList VideoLibrary::drives() const
             {"kind", source.kind},
             {"count", m_scanned.value(source.path).size()},
             {"scanning", source.scanning},
+            {"found", source.found->load()},
             {"sizeText", size(source.bytesTotal)},
             {"freeText", size(source.bytesFree)},
             {"usedFraction", source.bytesTotal > 0 ? 1.0 - double(source.bytesFree) / source.bytesTotal : 0.0},
@@ -298,8 +314,11 @@ void VideoLibrary::scanSource(const QString &path)
         return;
     VideoSource &source = m_sources[index];
     source.scanning = true;
-    if (m_pendingScans++ == 0)
+    *source.found = 0;
+    if (m_pendingScans++ == 0) {
         emit scanningChanged();
+        m_scanProgressTimer.start();
+    }
     if (source.external)
         emit drivesChanged();
 
@@ -308,7 +327,16 @@ void VideoLibrary::scanSource(const QString &path)
         watcher->deleteLater();
         onScanFinished(path, watcher->result());
     });
-    watcher->setFuture(QtConcurrent::run(scanFolder, source.path, source.external, source.driveId));
+    watcher->setFuture(QtConcurrent::run(scanFolder, source.path, source.external, source.driveId, source.found));
+}
+
+int VideoLibrary::videosFound() const
+{
+    int found = 0;
+    for (const VideoSource &source : m_sources)
+        if (source.scanning)
+            found += *source.found;
+    return found;
 }
 
 void VideoLibrary::onScanFinished(const QString &path, QList<VideoInfo> videos)
@@ -330,7 +358,9 @@ void VideoLibrary::onScanFinished(const QString &path, QList<VideoInfo> videos)
         }
     }
     if (m_pendingScans == 0) {
+        m_scanProgressTimer.stop();
         emit scanningChanged();
+        emit progressChanged();
         if (std::exchange(m_reportRescan, false)) {
             QSet<QString> now;
             for (const VideoInfo &v : std::as_const(m_videos))
@@ -487,8 +517,31 @@ void VideoLibrary::queueThumbnails()
 {
     m_thumbnailer->clear();
 
-    // What's on the Home page first, then everything else.
+    // The folder being looked at first, then what's on the Home page, then everything else.
+    // In the folder, what's on screen first: its own videos, then a cover for each
+    // sub-folder (their first video), then the rest of the sub-folders.
     QList<int> order;
+    if (m_hasPriority) {
+        const QString prefix = withSlash(m_priorityFolder);
+        QList<int> covers;
+        QList<int> deeper;
+        QSet<QString> covered;
+        for (int i = 0; i < m_videos.size(); ++i) {
+            const VideoInfo &v = m_videos[i];
+            if (m_priorityFolder.isEmpty() ? v.external : !(v.dir == m_priorityFolder || v.dir.startsWith(prefix)))
+                continue;
+            if (v.dir == m_priorityFolder) {
+                order.append(i);
+                continue;
+            }
+            // The sub-folder it's under: a library folder for "", otherwise the next folder down.
+            const QString sub = m_priorityFolder.isEmpty() ? v.root : v.dir.mid(prefix.size()).section(QLatin1Char('/'), 0, 0);
+            (covered.contains(sub) ? deeper : covers).append(i);
+            covered.insert(sub);
+        }
+        order += covers;
+        order += deeper;
+    }
     for (VideoModel *model : {m_continueWatching, m_recentlyAdded, m_quickPicks})
         for (int row = 0; row < model->rowCount(); ++row)
             order.append(m_byPath.value(model->pathAt(row)));
@@ -496,6 +549,7 @@ void VideoLibrary::queueThumbnails()
         order.append(i);
 
     QSet<int> queued;
+    QSet<QString> pending;
     for (int i : order) {
         if (queued.contains(i))
             continue;
@@ -503,13 +557,54 @@ void VideoLibrary::queueThumbnails()
         const VideoInfo &v = m_videos[i];
         const QJsonObject meta = m_metadata.value(cacheKey(v)).toObject();
         // Looked at again when the cache is from before sizes were kept ("w").
-        if (!meta.contains(QStringLiteral("w")) || (meta.value(QStringLiteral("thumb")).toBool() && !v.hasThumbnail))
+        if (!meta.contains(QStringLiteral("w")) || (meta.value(QStringLiteral("thumb")).toBool() && !v.hasThumbnail)) {
             m_thumbnailer->request(v.path, thumbnailFile(v));
+            pending.insert(v.path);
+        }
     }
+
+    // A new batch starts when the last one was finished; videos that have gone (an
+    // unplugged drive) drop out of it.
+    if (m_thumbPending.isEmpty())
+        m_thumbBatch.clear();
+    m_thumbBatch.removeIf([this](const QString &path) { return !m_byPath.contains(path); });
+    m_thumbPending = pending;
+    m_thumbBatch.unite(pending);
+    if (m_thumbPending.isEmpty())
+        m_thumbBatch.clear();
+    emit progressChanged();
+    emit thumbnailsQueued();
+}
+
+void VideoLibrary::prioritize(const QString &folder)
+{
+    if (m_hasPriority && m_priorityFolder == folder)
+        return;
+    m_priorityFolder = folder;
+    m_hasPriority = true;
+    if (!m_thumbPending.isEmpty())
+        queueThumbnails();
+}
+
+QVariantMap VideoLibrary::thumbnailProgressIn(const QString &folder) const
+{
+    const QString prefix = withSlash(folder);
+    const auto inside = [&](const QString &path) {
+        return folder.isEmpty() ? !m_videos.value(m_byPath.value(path, -1)).external : path.startsWith(prefix);
+    };
+    const int total = int(std::count_if(m_thumbBatch.begin(), m_thumbBatch.end(), inside));
+    const int left = int(std::count_if(m_thumbPending.begin(), m_thumbPending.end(), inside));
+    return {{"done", total - left}, {"total", left > 0 ? total : 0}};
 }
 
 void VideoLibrary::onThumbnailFinished(const QString &path, bool ok, double duration, int width, int height, int year)
 {
+    if (m_thumbPending.remove(path)) {
+        if (m_thumbPending.isEmpty())
+            m_thumbBatch.clear();
+        emit progressChanged();
+    }
+
     const int index = m_byPath.value(path, -1);
     // Gone, e.g. the drive was unplugged mid-grab: don't remember it as unreadable.
     if (index < 0 || (!ok && !QFileInfo::exists(path)))

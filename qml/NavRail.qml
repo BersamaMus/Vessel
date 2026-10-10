@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQuick.Shapes
 
 // The tabs down the left side of the window, as in Blimp: Home, Library and
 // External at the top, Settings at the bottom.
@@ -91,7 +92,83 @@ Rectangle {
         Tab { tabIndex: 2; iconName: "usb"; label: qsTr("External"); badge: VideoLibrary.drives.length }
     }
 
+    // Background work: a ring that fills as thumbnails are made, or spins while
+    // folders and drives are being looked through. Details on hover.
+    Item {
+        id: activity
+
+        readonly property int total: VideoLibrary.thumbnailsTotal
+        readonly property real fraction: total > 0 ? VideoLibrary.thumbnailsDone / total : 0
+        readonly property bool busy: total > 0 || VideoLibrary.scanning
+
+        anchors.bottom: settingsTab.top
+        anchors.bottomMargin: 10
+        anchors.horizontalCenter: parent.horizontalCenter
+        width: parent.width
+        height: 56
+        opacity: busy ? 1 : 0
+        visible: opacity > 0
+        Behavior on opacity { NumberAnimation { duration: 300 } }
+
+        HoverHandler { id: activityHover }
+        ToolTip.visible: activityHover.hovered
+        ToolTip.delay: 300
+        ToolTip.text: [
+            activity.total > 0 ? qsTr("Making thumbnails: %1 of %2").arg(VideoLibrary.thumbnailsDone).arg(activity.total) : "",
+            VideoLibrary.scanning ? (VideoLibrary.videosFound > 0 ? qsTr("Looking for videos: %1 found so far").arg(VideoLibrary.videosFound)
+                                                                  : qsTr("Looking for videos…")) : "",
+        ].filter(line => line).join("\n")
+
+        Shape {
+            id: ring
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: 30
+            height: 30
+            preferredRendererType: Shape.CurveRenderer
+
+            ShapePath {
+                strokeColor: "#33FFFFFF"
+                strokeWidth: 3
+                fillColor: "transparent"
+                PathAngleArc { centerX: 15; centerY: 15; radiusX: 13; radiusY: 13; startAngle: 0; sweepAngle: 360 }
+            }
+            ShapePath {
+                strokeColor: Theme.accent
+                strokeWidth: 3
+                capStyle: ShapePath.RoundCap
+                fillColor: "transparent"
+                PathAngleArc {
+                    centerX: 15; centerY: 15; radiusX: 13; radiusY: 13
+                    startAngle: -90
+                    // Filling up with thumbnails; a spinning quarter while only scanning.
+                    sweepAngle: activity.total > 0 ? Math.max(4, 360 * activity.fraction) : 90
+                    Behavior on sweepAngle { NumberAnimation { duration: 250 } }
+                }
+            }
+
+            RotationAnimation on rotation {
+                running: activity.visible && activity.total === 0
+                loops: Animation.Infinite
+                from: 0
+                to: 360
+                duration: 1000
+                onStopped: ring.rotation = 0
+            }
+        }
+
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: ring.bottom
+            anchors.topMargin: 5
+            text: activity.total > 0 ? Math.floor(activity.fraction * 100) + "%" : qsTr("Scanning")
+            color: Theme.textSecondary
+            font.pixelSize: 11
+            font.weight: Font.DemiBold
+        }
+    }
+
     Tab {
+        id: settingsTab
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 8
         tabIndex: 3

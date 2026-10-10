@@ -4,15 +4,17 @@ import QtQuick.Layouts
 
 // Search the library and connected drives by title or folder name, with the
 // Library's sort and filters. Recent searches show until something is typed.
-ScrollView {
+// The search box stays put; the results scroll under it in a GridView, which
+// only makes the rows on screen (a one-letter search can match thousands).
+FocusScope {
     id: page
 
     readonly property var app: ApplicationWindow.window
     readonly property string query: field.text.trim()
     // Results show once there's something to search for, or a filter to list by.
     readonly property bool showResults: query !== "" || filterBar.filtered
-    readonly property int columns: availableWidth > 1100 ? 2 : 1
-    readonly property real rowWidth: Math.floor((availableWidth - 2 * Theme.pagePadding - (columns - 1) * 16) / columns)
+    readonly property real gridWidth: width - 2 * Theme.pagePadding + 16
+    readonly property int columns: width > 1100 ? 2 : 1
 
     function focusField() {
         field.forceActiveFocus();
@@ -25,7 +27,6 @@ ScrollView {
             app.addRecentSearch(query);
     }
 
-    contentWidth: availableWidth
     clip: true
     Component.onCompleted: field.forceActiveFocus()
 
@@ -37,7 +38,7 @@ ScrollView {
     }
 
     ColumnLayout {
-        width: page.availableWidth
+        anchors.fill: parent
         spacing: 0
 
         RowLayout {
@@ -76,6 +77,7 @@ ScrollView {
                     TextField {
                         id: field
                         Layout.fillWidth: true
+                        focus: true
                         placeholderText: qsTr("Search videos and folders")
                         placeholderTextColor: Theme.textTertiary
                         color: Theme.textPrimary
@@ -182,51 +184,73 @@ ScrollView {
         }
 
         // --- Results -------------------------------------------------------
-        Text {
-            visible: page.showResults && results.count > 0
-            Layout.leftMargin: Theme.pagePadding
-            Layout.topMargin: 20
-            Layout.bottomMargin: 6
-            text: results.count === 1 ? qsTr("1 video") : qsTr("%1 videos").arg(results.count)
-            color: Theme.textSecondary
-            font.pixelSize: 14
-        }
-
-        EmptyNote {
-            visible: page.showResults && results.count === 0
-            Layout.topMargin: 24
-            iconName: "search"
-            text: page.query !== "" ? qsTr("No videos match \"%1\".").arg(page.query)
-                                    : qsTr("No videos match these filters.")
-        }
-
-        Flow {
+        GridView {
+            id: grid
             Layout.fillWidth: true
-            Layout.leftMargin: Theme.pagePadding - 8
-            Layout.rightMargin: Theme.pagePadding - 8
+            Layout.fillHeight: true
             visible: page.showResults
-            spacing: 0
+            clip: true
+            model: page.showResults ? results : null
+            cellWidth: Math.floor(page.gridWidth / page.columns)
+            cellHeight: Math.round(176 * 9 / 16) + 18
+            boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.vertical: ScrollBar {}
 
-            Repeater {
-                model: page.showResults ? results : null
-                delegate: PickRow {
-                    required property var model
-                    width: page.rowWidth + 16
+            header: ColumnLayout {
+                width: grid.width
+                spacing: 0
+
+                Text {
+                    visible: results.count > 0
+                    Layout.leftMargin: Theme.pagePadding
+                    Layout.topMargin: 20
+                    Layout.bottomMargin: 6
+                    text: results.count === 1 ? qsTr("1 video") : qsTr("%1 videos").arg(results.count)
+                    color: Theme.textSecondary
+                    font.pixelSize: 14
+                }
+
+                EmptyNote {
+                    visible: results.count === 0
+                    Layout.topMargin: 24
+                    iconName: "search"
+                    text: page.query !== "" ? qsTr("No videos match \"%1\".").arg(page.query)
+                                            : qsTr("No videos match these filters.")
+                }
+            }
+
+            delegate: Item {
+                id: cell
+                required property var model
+                width: grid.cellWidth
+                height: grid.cellHeight
+
+                PickRow {
+                    x: Theme.pagePadding - 8
+                    width: grid.cellWidth
+                    height: grid.cellHeight
                     thumbWidth: 176
                     titleLines: 2
-                    title: model.title
-                    subtitle: [model.subtitle, model.detail, model.remainingText].filter(part => part).join("  •  ")
-                    thumbnail: model.thumbnail
-                    durationText: model.durationText
-                    progress: model.progress
+                    title: cell.model.title
+                    subtitle: [cell.model.subtitle, cell.model.detail, cell.model.remainingText].filter(part => part).join("  •  ")
+                    thumbnail: cell.model.thumbnail
+                    loading: cell.model.thumbnailPending
+                    durationText: cell.model.durationText
+                    progress: cell.model.progress
                     onClicked: {
                         page.commit();
-                        page.app.play(model.path);
+                        page.app.play(cell.model.path);
                     }
                 }
             }
+
+            footer: Item { width: grid.width; height: 32 }
         }
 
-        Item { implicitHeight: 32 }
+        // Keeps the recent searches at the top when there are no results to fill the page.
+        Item {
+            visible: !page.showResults
+            Layout.fillHeight: true
+        }
     }
 }
