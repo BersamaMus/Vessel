@@ -82,6 +82,7 @@ set(QML_FILES
     qml/DropButton.qml
     qml/FilterBar.qml
     qml/WorkProgress.qml
+    qml/PageBar.qml
     qml/WatchView.qml
     qml/ExternalPage.qml
     qml/SettingsPage.qml
