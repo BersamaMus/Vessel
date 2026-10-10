@@ -2,12 +2,21 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-// Search the library and connected drives by title or folder name, with the
-// Library's sort and filters. Recent searches show until something is typed.
+// Search by title or folder name, with the Library's sort and filters: the library,
+// or from the External tab, a drive (or all of them). Recent searches show until
+// something is typed.
 // The search box stays put; the results scroll under it in a GridView, which
 // only makes the rows on screen (a one-letter search can match thousands).
 FocusScope {
     id: page
+
+    // Where to search: "library", "drives" (every connected drive), or one drive's path.
+    property string scope: "library"
+    readonly property bool oneDrive: scope !== "library" && scope !== "drives"
+    // Set for one drive, so the page closes with the rest of the drive's pages when it's unplugged.
+    readonly property string folder: oneDrive ? scope : ""
+    readonly property string scopeName: oneDrive ? VideoLibrary.folderName(scope)
+                                       : scope === "drives" ? qsTr("your drives") : qsTr("your library")
 
     readonly property var app: ApplicationWindow.window
     readonly property string query: field.text.trim()
@@ -32,7 +41,8 @@ FocusScope {
 
     VideoQuery {
         id: results
-        everywhere: true
+        folder: page.folder
+        source: page.scope === "drives" ? "drives" : "library"
         sort: "relevance"
         text: page.query
     }
@@ -78,7 +88,7 @@ FocusScope {
                         id: field
                         Layout.fillWidth: true
                         focus: true
-                        placeholderText: qsTr("Search videos and folders")
+                        placeholderText: qsTr("Search %1").arg(page.scopeName)
                         placeholderTextColor: Theme.textTertiary
                         color: Theme.textPrimary
                         selectionColor: Theme.accent
@@ -123,7 +133,7 @@ FocusScope {
             visible: !page.showResults && page.app.recentSearches.length === 0
             Layout.topMargin: 24
             iconName: "search"
-            text: qsTr("Find videos in your library and on connected drives by title or folder name, or list them by a filter.")
+            text: qsTr("Find videos in %1 by title or folder name, or list them by a filter.").arg(page.scopeName)
         }
 
         Text {
@@ -214,8 +224,8 @@ FocusScope {
                     visible: results.count === 0
                     Layout.topMargin: 24
                     iconName: "search"
-                    text: page.query !== "" ? qsTr("No videos match \"%1\".").arg(page.query)
-                                            : qsTr("No videos match these filters.")
+                    text: page.query !== "" ? qsTr("No videos in %1 match \"%2\".").arg(page.scopeName).arg(page.query)
+                                            : qsTr("No videos in %1 match these filters.").arg(page.scopeName)
                 }
             }
 

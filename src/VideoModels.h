@@ -64,10 +64,11 @@ private:
 
     QPointer<VideoLibrary> m_library;
     Source m_source;
-    QList<int> m_rows;   // indexes into the library
+    QList<int> m_rows;          // indexes into the library
+    QHash<int, int> m_rowOf;    // and back, so one video's change is found at once
 };
 
-// The videos in a folder and its sub-folders (or the library, or everywhere),
+// The videos in a folder and its sub-folders (or the library, or every drive),
 // narrowed down by search text and filters, in the chosen order. Behind the
 // Library's sort and filter bar, and Search:
 //
@@ -80,8 +81,8 @@ class VideoQuery : public VideoModel, public QQmlParserStatus
 
     // An absolute folder, or "" for the library as a whole.
     Q_PROPERTY(QString folder READ folder WRITE setFolder NOTIFY queryChanged)
-    // With folder "": the connected drives too, not just the library.
-    Q_PROPERTY(bool everywhere READ everywhere WRITE setEverywhere NOTIFY queryChanged)
+    // With folder "": "library" (the default) or "drives" (every connected drive).
+    Q_PROPERTY(QString source READ source WRITE setSource NOTIFY queryChanged)
     // Matched against titles, then folder names; "" matches everything.
     Q_PROPERTY(QString text READ text WRITE setText NOTIFY queryChanged)
     // "relevance" (best search match first), "name", "added", "watched", "year", "duration" or "size".
@@ -100,7 +101,7 @@ public:
     explicit VideoQuery(QObject *parent = nullptr);
 
     QString folder() const { return m_folder; }
-    bool everywhere() const { return m_everywhere; }
+    QString source() const { return m_source; }
     QString text() const { return m_text; }
     QString sort() const { return m_sort; }
     QString length() const { return m_length; }
@@ -110,7 +111,7 @@ public:
     QStringList types() const { return m_types; }
 
     void setFolder(const QString &folder) { set(m_folder, folder); }
-    void setEverywhere(bool everywhere);
+    void setSource(const QString &source) { set(m_source, source); }
     void setText(const QString &text) { set(m_text, text); }
     void setSort(const QString &sort);
     void setLength(const QString &length) { set(m_length, length); }
@@ -135,7 +136,7 @@ private:
 
     bool m_complete = false;
     QString m_folder;
-    bool m_everywhere = false;
+    QString m_source = QStringLiteral("library");
     QString m_text;
     QString m_sort = QStringLiteral("name");
     QString m_length;

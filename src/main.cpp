@@ -5,6 +5,9 @@
 #include <QQuickWindow>
 
 #include <clocale>
+#include <cstring>
+
+#include "Thumbnailer.h"
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -12,6 +15,12 @@
 
 int main(int argc, char *argv[])
 {
+    // A thumbnail worker (see Thumbnailer): no window, just frames grabbed on request.
+    if (argc > 1 && std::strcmp(argv[1], "--thumbnail-worker") == 0) {
+        std::setlocale(LC_NUMERIC, "C");   // as libmpv requires
+        return Thumbnailer::runWorker();
+    }
+
     // libmpv renders with OpenGL, so Qt Quick must use it too (not Direct3D).
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
 

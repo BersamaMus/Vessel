@@ -8,6 +8,8 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
+#include <QElapsedTimer>
+#include <QLoggingCategory>
 #include <QFile>
 #include <QFileInfo>
 #include <QFutureWatcher>
@@ -29,6 +31,9 @@
 #else
 #include <QDesktopServices>
 #endif
+
+// Timings of scans and library updates: QT_LOGGING_RULES="bvp.perf.debug=true".
+Q_LOGGING_CATEGORY(lcPerf, "bvp.perf", QtWarningMsg)
 
 namespace {
 
@@ -111,11 +116,30 @@ int yearIn(const QString &name)
     return year;
 }
 
+// Names a video's thumbnail and cached metadata. Changes when the file is replaced
+// (another size or modified time), so a stale thumbnail isn't reused.
+QString cacheKeyOf(const QString &key, qint64 size, const QDateTime &modified)
+{
+    const QByteArray id = key.toUtf8() + '|' + QByteArray::number(size) + '|'
+        + QByteArray::number(modified.toMSecsSinceEpoch());
+    return QString::fromLatin1(QCryptographicHash::hash(id, QCryptographicHash::Sha1).toHex());
+}
+
+// Every video under `root`, in natural path order, with everything that can be worked
+// out from the file system alone (on the scanning thread, keeping the UI free).
+// `sourceName` is what the library folder or drive is called, for search.
 QList<VideoInfo> scanFolder(const QString &root, bool external, const QString &driveId,
-                            std::shared_ptr<std::atomic_int> found)
+                            const QString &sourceName, std::shared_ptr<std::atomic_int> found)
 {
     QList<VideoInfo> videos;
     const QString prefix = withSlash(root);
+    // One copy of each folder's path (and its search text), shared by its videos.
+    struct Folder
+    {
+        QString path;
+        QString placeKey;
+    };
+    QHash<QString, Folder> folders;
     // Hidden and system folders (the recycle bin, System Volume Information) are skipped.
     QDirIterator it(root, QDir::Files, QDirIterator::Subdirectories);
     while (it.hasNext()) {
@@ -127,9 +151,17 @@ QList<VideoInfo> scanFolder(const QString &root, bool external, const QString &d
         video.path = file.absoluteFilePath();
         video.key = external ? QStringLiteral("drive:%1/%2").arg(driveId, video.path.mid(prefix.size()))
                              : video.path;
-        video.title = prettyTitle(file.completeBaseName());
-        video.year = yearIn(file.completeBaseName());
-        video.dir = file.absolutePath();
+        const QString baseName = file.completeBaseName();
+        video.title = prettyTitle(baseName);
+        video.year = yearIn(baseName);
+        const QString dir = file.absolutePath();
+        auto folder = folders.find(dir);
+        if (folder == folders.end()) {
+            const QString inside = dir == root ? QString() : dir.mid(prefix.size());
+            folder = folders.insert(dir, {dir, searchKey(inside + QLatin1Char(' ') + sourceName)});
+        }
+        video.dir = folder->path;
+        video.placeKey = folder->placeKey;
         video.root = root;
         video.type = file.suffix().toLower();
         video.external = external;
@@ -138,17 +170,26 @@ QList<VideoInfo> scanFolder(const QString &root, bool external, const QString &d
         // Creation time is when the file was copied here, so it's when it was "added".
         const QDateTime born = file.birthTime();
         video.added = born.isValid() ? born : video.modified;
-        videos.append(video);
+        video.cacheKey = cacheKeyOf(video.key, video.size, video.modified);
+        video.titleKey = searchKey(video.title);
+        videos.append(std::move(video));
         ++*found;
     }
 
+    // Sort keys once per path, rather than a locale comparison for every pair.
     QCollator collator;
     collator.setNumericMode(true);
     collator.setCaseSensitivity(Qt::CaseInsensitive);
-    std::sort(videos.begin(), videos.end(), [&](const VideoInfo &a, const VideoInfo &b) {
-        return collator.compare(a.path, b.path) < 0;
-    });
-    return videos;
+    std::vector<std::pair<QCollatorSortKey, qsizetype>> order;
+    order.reserve(videos.size());
+    for (qsizetype i = 0; i < videos.size(); ++i)
+        order.emplace_back(collator.sortKey(videos[i].path), i);
+    std::sort(order.begin(), order.end(), [](const auto &a, const auto &b) { return a.first.compare(b.first) < 0; });
+    QList<VideoInfo> sorted;
+    sorted.reserve(videos.size());
+    for (const auto &[key, index] : order)
+        sorted.append(std::move(videos[index]));
+    return sorted;
 }
 
 bool isFinished(double position, double duration)
@@ -161,7 +202,9 @@ bool isFinished(double position, double duration)
 
 VideoLibrary::VideoLibrary(QObject *parent)
     : QObject(parent)
-    , m_dataDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
+    // BVP_DATA_DIR points a test copy at its own settings, history and cache.
+    , m_dataDir(qEnvironmentVariable("BVP_DATA_DIR",
+                                     QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)))
     , m_pickSeed(QRandomGenerator::global()->generate())
 {
     QDir().mkpath(m_dataDir + QStringLiteral("/thumbnails"));
@@ -170,6 +213,10 @@ VideoLibrary::VideoLibrary(QObject *parent)
     m_saveTimer.setSingleShot(true);
     m_saveTimer.setInterval(2000);
     connect(&m_saveTimer, &QTimer::timeout, this, &VideoLibrary::save);
+
+    m_progressTimer.setSingleShot(true);
+    m_progressTimer.setInterval(250);
+    connect(&m_progressTimer, &QTimer::timeout, this, &VideoLibrary::progressChanged);
 
     m_scanProgressTimer.setInterval(400);
     connect(&m_scanProgressTimer, &QTimer::timeout, this, [this] {
@@ -323,11 +370,15 @@ void VideoLibrary::scanSource(const QString &path)
         emit drivesChanged();
 
     auto *watcher = new QFutureWatcher<QList<VideoInfo>>(this);
-    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, path] {
+    QElapsedTimer timer;
+    timer.start();
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, path, timer] {
         watcher->deleteLater();
+        qCDebug(lcPerf) << "scanned" << path << watcher->result().size() << "videos in" << timer.elapsed() << "ms";
         onScanFinished(path, watcher->result());
     });
-    watcher->setFuture(QtConcurrent::run(scanFolder, source.path, source.external, source.driveId, source.found));
+    watcher->setFuture(QtConcurrent::run(scanFolder, source.path, source.external, source.driveId,
+                                         sourceName(source.path), source.found));
 }
 
 int VideoLibrary::videosFound() const
@@ -476,6 +527,8 @@ int VideoLibrary::removeLibraryFolder(const QString &path)
 
 void VideoLibrary::rebuild()
 {
+    QElapsedTimer timer;
+    timer.start();
     m_videos.clear();
     m_byPath.clear();
     for (const VideoSource &source : std::as_const(m_sources)) {
@@ -484,16 +537,13 @@ void VideoLibrary::rebuild()
             if (m_byPath.contains(found.path))
                 continue;
             VideoInfo v = found;
-            const QJsonObject meta = m_metadata.value(cacheKey(v)).toObject();
-            v.duration = meta.value(QStringLiteral("duration")).toDouble();
-            v.width = meta.value(QStringLiteral("w")).toInt();
-            v.height = meta.value(QStringLiteral("h")).toInt();
+            const VideoMeta meta = m_metadata.value(v.cacheKey);
+            v.duration = meta.duration;
+            v.width = meta.width;
+            v.height = meta.height;
             if (v.year == 0)
-                v.year = meta.value(QStringLiteral("year")).toInt();
-            v.hasThumbnail = meta.value(QStringLiteral("thumb")).toBool() && QFile::exists(thumbnailFile(v));
-            v.titleKey = searchKey(v.title);
-            const QString inside = v.dir == v.root ? QString() : v.dir.mid(withSlash(v.root).size());
-            v.placeKey = searchKey(inside + QLatin1Char(' ') + sourceName(v.root));
+                v.year = meta.year;
+            v.hasThumbnail = meta.thumb && m_thumbFiles.contains(v.cacheKey);
 
             const QJsonObject seen = m_history.value(v.key).toObject();
             if (!seen.isEmpty()) {
@@ -508,9 +558,13 @@ void VideoLibrary::rebuild()
         }
     }
 
+    const qint64 merged = timer.elapsed();
     emit libraryReset();
     refreshModels();
+    const qint64 refreshed = timer.elapsed();
     queueThumbnails();
+    qCDebug(lcPerf) << "rebuild:" << m_videos.size() << "videos; merge" << merged << "ms, models"
+                    << refreshed - merged << "ms, thumbnail queue" << timer.elapsed() - refreshed << "ms";
 }
 
 void VideoLibrary::queueThumbnails()
@@ -548,16 +602,15 @@ void VideoLibrary::queueThumbnails()
     for (int i = 0; i < m_videos.size(); ++i)
         order.append(i);
 
-    QSet<int> queued;
+    QList<bool> queued(m_videos.size(), false);
     QSet<QString> pending;
     for (int i : order) {
-        if (queued.contains(i))
+        if (std::exchange(queued[i], true))
             continue;
-        queued.insert(i);
         const VideoInfo &v = m_videos[i];
-        const QJsonObject meta = m_metadata.value(cacheKey(v)).toObject();
-        // Looked at again when the cache is from before sizes were kept ("w").
-        if (!meta.contains(QStringLiteral("w")) || (meta.value(QStringLiteral("thumb")).toBool() && !v.hasThumbnail)) {
+        const VideoMeta meta = m_metadata.value(v.cacheKey);
+        // Looked at again when the cache is from before sizes were kept.
+        if (!meta.probed || (meta.thumb && !v.hasThumbnail)) {
             m_thumbnailer->request(v.path, thumbnailFile(v));
             pending.insert(v.path);
         }
@@ -600,9 +653,12 @@ QVariantMap VideoLibrary::thumbnailProgressIn(const QString &folder) const
 void VideoLibrary::onThumbnailFinished(const QString &path, bool ok, double duration, int width, int height, int year)
 {
     if (m_thumbPending.remove(path)) {
-        if (m_thumbPending.isEmpty())
+        if (m_thumbPending.isEmpty()) {
             m_thumbBatch.clear();
-        emit progressChanged();
+            emit progressChanged();
+        } else if (!m_progressTimer.isActive()) {
+            m_progressTimer.start();   // a few updates a second, not one per thumbnail
+        }
     }
 
     const int index = m_byPath.value(path, -1);
@@ -617,8 +673,10 @@ void VideoLibrary::onThumbnailFinished(const QString &path, bool ok, double dura
     if (v.year == 0)
         v.year = year;
     v.hasThumbnail = ok;
-    m_metadata.insert(cacheKey(v), QJsonObject{{"duration", v.duration}, {"thumb", ok},
-                                               {"w", width}, {"h", height}, {"year", year}});
+    m_metadata.insert(v.cacheKey, {v.duration, width, height, year, ok, true});
+    if (ok)
+        m_thumbFiles.insert(v.cacheKey);
+    m_metadataChanged = true;
     scheduleSave();
     emit videoChanged(index);
 }
@@ -686,6 +744,16 @@ bool VideoLibrary::isDrive(const QString &folder) const
 {
     const int index = sourceIndex(folder);
     return index >= 0 && m_sources[index].external;
+}
+
+QString VideoLibrary::driveOf(const QString &folder) const
+{
+    if (folder.isEmpty())
+        return {};
+    for (const VideoSource &source : m_sources)
+        if (source.external && (folder == source.path || folder.startsWith(withSlash(source.path))))
+            return source.path;
+    return {};
 }
 
 FolderModel *VideoLibrary::foldersIn(const QString &folder)
@@ -971,17 +1039,9 @@ QString VideoLibrary::sourceName(const QString &path) const
     return name.isEmpty() ? QDir::toNativeSeparators(path) : name;   // a whole drive, "D:\"
 }
 
-QString VideoLibrary::cacheKey(const VideoInfo &video) const
-{
-    // Changes when the file is replaced, so stale thumbnails aren't reused.
-    const QByteArray id = video.key.toUtf8() + '|' + QByteArray::number(video.size) + '|'
-        + QByteArray::number(video.modified.toMSecsSinceEpoch());
-    return QString::fromLatin1(QCryptographicHash::hash(id, QCryptographicHash::Sha1).toHex());
-}
-
 QString VideoLibrary::thumbnailFile(const VideoInfo &video) const
 {
-    return m_dataDir + QStringLiteral("/thumbnails/") + cacheKey(video) + QStringLiteral(".jpg");
+    return m_dataDir + QStringLiteral("/thumbnails/") + video.cacheKey + QStringLiteral(".jpg");
 }
 
 void VideoLibrary::saveLibraryFolders()
@@ -998,8 +1058,24 @@ void VideoLibrary::loadState()
             return QJsonObject();
         return QJsonDocument::fromJson(file.readAll()).object();
     };
-    m_metadata = readJson(QStringLiteral("metadata.json"));
+    const QJsonObject metadata = readJson(QStringLiteral("metadata.json"));
+    m_metadata.reserve(metadata.size());
+    for (auto it = metadata.begin(); it != metadata.end(); ++it) {
+        const QJsonObject entry = it.value().toObject();
+        m_metadata.insert(it.key(), {entry.value(QLatin1String("duration")).toDouble(),
+                                     entry.value(QLatin1String("w")).toInt(),
+                                     entry.value(QLatin1String("h")).toInt(),
+                                     entry.value(QLatin1String("year")).toInt(),
+                                     entry.value(QLatin1String("thumb")).toBool(),
+                                     entry.contains(QLatin1String("w"))});
+    }
     m_history = readJson(QStringLiteral("history.json"));
+
+    // Which thumbnails exist, read once (rather than a file check per video per rebuild).
+    const QStringList files = QDir(m_dataDir + QStringLiteral("/thumbnails")).entryList({QStringLiteral("*.jpg")}, QDir::Files);
+    m_thumbFiles.reserve(files.size());
+    for (const QString &file : files)
+        m_thumbFiles.insert(file.chopped(4));
 }
 
 void VideoLibrary::scheduleSave()
@@ -1018,6 +1094,19 @@ void VideoLibrary::save()
             file.commit();
         }
     };
-    writeJson(QStringLiteral("metadata.json"), m_metadata);
+    if (std::exchange(m_metadataChanged, false)) {
+        QJsonObject metadata;
+        for (auto it = m_metadata.cbegin(); it != m_metadata.cend(); ++it) {
+            const VideoMeta &m = it.value();
+            QJsonObject entry{{"duration", m.duration}, {"thumb", m.thumb}};
+            if (m.probed) {
+                entry.insert(QLatin1String("w"), m.width);
+                entry.insert(QLatin1String("h"), m.height);
+                entry.insert(QLatin1String("year"), m.year);
+            }
+            metadata.insert(it.key(), entry);
+        }
+        writeJson(QStringLiteral("metadata.json"), metadata);
+    }
     writeJson(QStringLiteral("history.json"), m_history);
 }
