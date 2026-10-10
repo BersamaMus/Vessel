@@ -379,7 +379,7 @@ void VideoLibrary::onDrivesChanged()
     emit drivesChanged();
 }
 
-QString VideoLibrary::addLibraryFolder(const QString &input)
+QString VideoLibrary::addLibraryFolder(const QString &input, int at)
 {
     const QString path = QDir::cleanPath(QDir::fromNativeSeparators(input));
     if (path.isEmpty() || !QFileInfo(path).isDir())
@@ -404,6 +404,8 @@ QString VideoLibrary::addLibraryFolder(const QString &input)
     }
     while (position < m_sources.size() && !m_sources[position].external)
         ++position;
+    if (at >= 0 && at < position)
+        position = at;
 
     VideoSource source;
     source.path = path;
@@ -416,16 +418,17 @@ QString VideoLibrary::addLibraryFolder(const QString &input)
     return {};
 }
 
-void VideoLibrary::removeLibraryFolder(const QString &path)
+int VideoLibrary::removeLibraryFolder(const QString &path)
 {
     const int index = sourceIndex(path);
     if (index < 0 || m_sources[index].external)
-        return;
+        return -1;
     m_sources.removeAt(index);
     m_scanned.remove(path);
     saveLibraryFolders();
     emit libraryFoldersChanged();
     rebuild();
+    return index;   // library folders come first, so this is also their position
 }
 
 void VideoLibrary::rebuild()

@@ -95,10 +95,12 @@ public:
     // Looks for new and removed videos; rescanFinished() reports what changed.
     Q_INVOKABLE void rescan();
     Q_INVOKABLE void reshuffleQuickPicks();
-    // Returns an error message, or "" when the folder was added.
-    Q_INVOKABLE QString addLibraryFolder(const QString &path);
-    // Takes the folder out of the library (the files stay where they are).
-    Q_INVOKABLE void removeLibraryFolder(const QString &path);
+    // Returns an error message, or "" when the folder was added. It goes at `position` in
+    // libraryFolders (for Undo), or at the end.
+    Q_INVOKABLE QString addLibraryFolder(const QString &path, int position = -1);
+    // Takes the folder out of the library (the files stay where they are) and returns
+    // where it was in libraryFolders, or -1.
+    Q_INVOKABLE int removeLibraryFolder(const QString &path);
 
     // Models for browsing one folder.
     Q_INVOKABLE VideoModel *videosIn(const QString &folder);
