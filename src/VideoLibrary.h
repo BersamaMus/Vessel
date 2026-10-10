@@ -17,6 +17,9 @@
 class DriveWatcher;
 class Thumbnailer;
 
+// Under this many seconds in, a video doesn't count as started.
+inline constexpr double kMinProgress = 10;
+
 struct VideoInfo
 {
     QString path;       // absolute, with '/' separators
@@ -27,11 +30,18 @@ struct VideoInfo
     QString title;
     QString dir;        // absolute folder the file is in
     QString root;       // the library folder or drive it was found under
+    QString type;       // the file extension, lowercase: "mp4"
     bool external = false;
     qint64 size = 0;
     QDateTime modified;
     QDateTime added;
     double duration = 0;
+    int width = 0;      // 0 until the video has been looked at
+    int height = 0;
+    int year = 0;       // release year, from the name or the file's tags; 0 if unknown
+    // The title and the folders it's in, as search compares them (see searchKey).
+    QString titleKey;
+    QString placeKey;
     bool hasThumbnail = false;
     double position = 0;    // last watched position, seconds
     qint64 watchedAt = 0;   // ms since epoch; 0 if never watched
@@ -143,6 +153,8 @@ public:
     const VideoInfo &video(int index) const { return m_videos.at(index); }
     QUrl thumbnailUrl(int index) const;
     QList<int> indexesIn(const QString &folder) const;
+    // Keeps a model up to date as the library changes.
+    void track(VideoModel *model);
     // "Season 2 · House MD…": where a video is, for subtitles.
     QString locationOf(const VideoInfo &video) const;
     QStringList libraryRoots() const;
@@ -168,7 +180,7 @@ private:
     void onScanFinished(const QString &path, QList<VideoInfo> videos);
     void onDrivesChanged();
     void rebuild();
-    void onThumbnailFinished(const QString &path, bool ok, double duration);
+    void onThumbnailFinished(const QString &path, bool ok, double duration, int width, int height, int year);
     void queueThumbnails();
     void refreshModels();
     void refreshContinueWatching();
@@ -196,7 +208,7 @@ private:
     QHash<QString, int> m_byPath;
     quint32 m_pickSeed = 0;
 
-    QJsonObject m_metadata;   // cache key -> {duration, thumb}
+    QJsonObject m_metadata;   // cache key -> {duration, thumb, w, h, year}
     QJsonObject m_history;    // video key -> {position, duration, watchedAt, finished}
     QTimer m_saveTimer;
 

@@ -2,7 +2,8 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-// One folder of the library: its sub-folders, then its videos, in grids.
+// One folder of the library: its sub-folders, then its videos, in grids. Sorting
+// (other than by name) or filtering lists every video in it, sub-folders included.
 ScrollView {
     id: page
 
@@ -19,9 +20,16 @@ ScrollView {
     readonly property int columns: Math.max(1, Math.floor((availableWidth - 2 * Theme.pagePadding + gap) / (220 + gap)))
     readonly property real gap: 16
     readonly property real cardWidth: Math.floor((availableWidth - 2 * Theme.pagePadding - (columns - 1) * gap) / columns)
+    // Sorted or filtered: one list of everything in the folder instead of folders, then videos.
+    readonly property bool flat: results.sort !== "name" || filterBar.filtered
 
     contentWidth: availableWidth
     clip: true
+
+    VideoQuery {
+        id: results
+        folder: page.folder
+    }
 
     component SectionLabel: Text {
         Layout.leftMargin: Theme.pagePadding
@@ -72,24 +80,78 @@ ScrollView {
                     font.pixelSize: 14
                 }
             }
+
+            IconButton {
+                Layout.alignment: Qt.AlignTop
+                iconName: "search"
+                tip: qsTr("Search (Ctrl+F)")
+                onClicked: page.app.openSearch()
+            }
+        }
+
+        FilterBar {
+            id: filterBar
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.pagePadding
+            Layout.rightMargin: Theme.pagePadding
+            Layout.topMargin: 16
+            visible: results.types.length > 0
+            query: results
         }
 
         EmptyNote {
-            visible: page.subfolders.count === 0 && page.videos.count === 0 && !VideoLibrary.scanning
+            visible: !page.flat && page.subfolders.count === 0 && page.videos.count === 0 && !VideoLibrary.scanning
             Layout.topMargin: 24
             iconName: "folder"
             text: page.isLibraryTab ? qsTr("No videos in your library yet. Add folders in Settings.")
                                     : qsTr("No videos in this folder.")
         }
 
+        // --- Sorted or filtered ------------------------------------------
         SectionLabel {
-            visible: page.started !== null && page.started.count > 0
+            visible: page.flat && results.count > 0
+            text: results.count === 1 ? qsTr("1 video") : qsTr("%1 videos").arg(results.count)
+        }
+
+        EmptyNote {
+            visible: page.flat && results.count === 0
+            Layout.topMargin: 24
+            iconName: "search"
+            text: qsTr("No videos here match these filters.")
+        }
+
+        Flow {
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.pagePadding
+            Layout.rightMargin: Theme.pagePadding
+            visible: page.flat
+            spacing: page.gap
+
+            Repeater {
+                model: page.flat ? results : null
+                delegate: VideoCard {
+                    required property var model
+                    width: page.cardWidth
+                    title: model.title
+                    // What it's sorted by, or how far in, or else where it is.
+                    subtitle: [model.detail, model.remainingText].filter(part => part).join("  •  ") || model.subtitle
+                    thumbnail: model.thumbnail
+                    durationText: model.durationText
+                    progress: model.progress
+                    onClicked: page.app.play(model.path)
+                }
+            }
+        }
+
+        // --- Folders, then videos -----------------------------------------
+        SectionLabel {
+            visible: !page.flat && page.started !== null && page.started.count > 0
             text: qsTr("Continue watching")
         }
 
         Shelf {
             Layout.fillWidth: true
-            visible: page.started !== null && page.started.count > 0
+            visible: !page.flat && page.started !== null && page.started.count > 0
             model: page.started
             cellWidth: 276
             cellHeight: Math.round(260 * 9 / 16) + 62
@@ -107,7 +169,7 @@ ScrollView {
         }
 
         SectionLabel {
-            visible: page.subfolders.count > 0
+            visible: !page.flat && page.subfolders.count > 0
             text: qsTr("Folders")
         }
 
@@ -115,7 +177,7 @@ ScrollView {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.pagePadding
             Layout.rightMargin: Theme.pagePadding
-            visible: page.subfolders.count > 0
+            visible: !page.flat && page.subfolders.count > 0
             spacing: page.gap
 
             Repeater {
@@ -132,7 +194,7 @@ ScrollView {
         }
 
         SectionLabel {
-            visible: page.videos.count > 0
+            visible: !page.flat && page.videos.count > 0
             text: qsTr("Videos")
         }
 
@@ -140,7 +202,7 @@ ScrollView {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.pagePadding
             Layout.rightMargin: Theme.pagePadding
-            visible: page.videos.count > 0
+            visible: !page.flat && page.videos.count > 0
             spacing: page.gap
 
             Repeater {

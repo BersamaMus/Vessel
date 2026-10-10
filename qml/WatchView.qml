@@ -15,6 +15,11 @@ Item {
 
     property string path
     property string mode: "closed"   // "watch", "mini", "full" or "closed"
+    // Typing goes to the player's shortcuts, not a search box left focused underneath.
+    onModeChanged: {
+        if (mode === "watch" || mode === "full")
+            forceActiveFocus();
+    }
     // 0 = watch page, 1 = mini player; follows the finger while swiping.
     property real miniProgress: 0
     // 0 = watch page, 1 = full screen.
@@ -265,6 +270,19 @@ Item {
         indicatorTimer.restart();
     }
 
+    // The compression standard for mpv's codec name: "h264" is "H.264 (AVC)".
+    function codecName(format) {
+        const names = {
+            h264: "H.264 (AVC)", hevc: "H.265 (HEVC)", av1: "AV1", vp9: "VP9", vp8: "VP8",
+            mpeg4: "MPEG-4 Part 2 (DivX/Xvid)", mpeg2video: "MPEG-2", mpeg1video: "MPEG-1",
+            msmpeg4v3: "MS MPEG-4 v3", msmpeg4v2: "MS MPEG-4 v2", h263: "H.263",
+            wmv3: "WMV 9", wmv2: "WMV 8", wmv1: "WMV 7", vc1: "VC-1",
+            prores: "ProRes", theora: "Theora", flv1: "Sorenson Spark", mjpeg: "Motion JPEG",
+            rv40: "RealVideo 4", rv30: "RealVideo 3",
+        };
+        return format ? (names[format] ?? format.toUpperCase()) : "";
+    }
+
     function scrollQueueToCurrent() {
         const index = queue ? queue.indexOf(path) : -1;
         if (index >= 0)
@@ -465,13 +483,22 @@ Item {
                         font.weight: Font.DemiBold
                         elide: Text.ElideMiddle
                     }
+                    // "MP4  •  H.264 (AVC)  •  1920 × 1080  •  23.98 fps  •  1.4 GB"
                     Text {
                         width: parent.width
-                        text: [mpv.videoWidth > 0 ? mpv.videoWidth + " × " + mpv.videoHeight : "",
-                               mpv.videoFormat.toUpperCase(), watch.details.sizeText]
-                              .filter(part => part).join("  •  ")
+                        text: {
+                            const name = watch.details.fileName ?? "";
+                            const type = name.includes(".") ? name.split(".").pop().toUpperCase() : "";
+                            const fps = Math.round(mpv.frameRate * 100) / 100;
+                            return [type, watch.codecName(mpv.videoFormat),
+                                    mpv.videoWidth > 0 ? mpv.videoWidth + " × " + mpv.videoHeight : "",
+                                    fps > 0 ? qsTr("%1 fps").arg(Number.isInteger(fps) ? fps : fps.toFixed(2).replace(/0$/, "")) : "",
+                                    watch.details.sizeText]
+                                   .filter(part => part).join("  •  ");
+                        }
                         color: Theme.textSecondary
                         font.pixelSize: 13
+                        elide: Text.ElideRight
                     }
 
                     // Opens the folder with this file selected.

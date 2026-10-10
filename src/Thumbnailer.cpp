@@ -14,7 +14,25 @@ struct GrabResult
 {
     bool ok = false;
     double duration = 0;
+    int width = 0;
+    int height = 0;
+    int year = 0;
 };
+
+// The year of a "date", "year" or "date_released" tag ("1994", "1994-03-12"); 0 if none.
+int taggedYear(mpv_handle *mpv)
+{
+    for (const char *key : {"metadata/by-key/date", "metadata/by-key/year", "metadata/by-key/date_released"}) {
+        char *value = mpv_get_property_string(mpv, key);
+        if (!value)
+            continue;
+        const int year = QString::fromUtf8(value).left(4).toInt();
+        mpv_free(value);
+        if (year >= 1900 && year <= 2100)
+            return year;
+    }
+    return 0;
+}
 
 GrabResult grabFrame(const QString &videoPath, const QString &outputFile, const std::atomic_bool &stopping)
 {
@@ -58,9 +76,17 @@ GrabResult grabFrame(const QString &videoPath, const QString &outputFile, const 
         while (!done && !deadline.hasExpired() && !stopping) {
             mpv_event *event = mpv_wait_event(mpv, 0.25);
             switch (event->event_id) {
-            case MPV_EVENT_FILE_LOADED:
+            case MPV_EVENT_FILE_LOADED: {
                 mpv_get_property(mpv, "duration", MPV_FORMAT_DOUBLE, &result.duration);
+                // The size the file says it is (before the scale filter).
+                int64_t width = 0, height = 0;
+                mpv_get_property(mpv, "width", MPV_FORMAT_INT64, &width);
+                mpv_get_property(mpv, "height", MPV_FORMAT_INT64, &height);
+                result.width = int(width);
+                result.height = int(height);
+                result.year = taggedYear(mpv);
                 break;
+            }
             case MPV_EVENT_END_FILE: {
                 auto *end = static_cast<mpv_event_end_file *>(event->data);
                 if (end->reason == MPV_END_FILE_REASON_ERROR)
@@ -108,7 +134,7 @@ void Thumbnailer::request(const QString &videoPath, const QString &outputFile)
             return;
         const GrabResult result = grabFrame(videoPath, outputFile, m_stopping);
         if (!m_stopping)
-            emit finished(videoPath, result.ok, result.duration);
+            emit finished(videoPath, result.ok, result.duration, result.width, result.height, result.year);
     });
 }
 

@@ -78,6 +78,9 @@ set(QML_FILES
     qml/NavRail.qml
     qml/HomePage.qml
     qml/FolderPage.qml
+    qml/SearchPage.qml
+    qml/DropButton.qml
+    qml/FilterBar.qml
     qml/WatchView.qml
     qml/ExternalPage.qml
     qml/SettingsPage.qml

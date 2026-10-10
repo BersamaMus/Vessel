@@ -8,6 +8,7 @@ MenuItem {
     leftPadding: 16
     rightPadding: 16
     implicitHeight: 40
+    indicator: null   // the tick is drawn below
 
     contentItem: Row {
         spacing: 10
