@@ -29,6 +29,11 @@ ScrollView {
             AppLogo {}
             Item { Layout.fillWidth: true }
             IconButton {
+                iconName: "search"
+                tip: qsTr("Search (Ctrl+F)")
+                onClicked: page.app.openSearch()
+            }
+            IconButton {
                 iconName: "folder_open"
                 tip: qsTr("Open a file (Ctrl+O)")
                 onClicked: page.app.openFileDialog()

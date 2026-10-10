@@ -164,6 +164,7 @@ MpvItem::MpvItem(QQuickItem *parent)
     mpv_observe_property(m_mpv, 0, "width", MPV_FORMAT_INT64);
     mpv_observe_property(m_mpv, 0, "height", MPV_FORMAT_INT64);
     mpv_observe_property(m_mpv, 0, "video-format", MPV_FORMAT_STRING);
+    mpv_observe_property(m_mpv, 0, "container-fps", MPV_FORMAT_DOUBLE);
     mpv_observe_property(m_mpv, 0, "track-list", MPV_FORMAT_NODE);
 
     mpv_set_wakeup_callback(m_mpv, [](void *ctx) {
@@ -228,6 +229,9 @@ void MpvItem::processEvents()
                 emit videoInfoChanged();
             } else if (name == "video-format") {
                 m_videoFormat = has ? QString::fromUtf8(*static_cast<char **>(prop->data)) : QString();
+                emit videoInfoChanged();
+            } else if (name == "container-fps") {
+                m_frameRate = asDouble();
                 emit videoInfoChanged();
             } else if (name == "track-list") {
                 updateTracks(has ? toVariant(*static_cast<mpv_node *>(prop->data)).toList() : QVariantList());

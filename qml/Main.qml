@@ -34,6 +34,35 @@ ApplicationWindow {
         contentStack.push(folderPage, { folder: folder });
     }
 
+    // The search page, over whichever page is showing (or back to it, if it already is).
+    function openSearch() {
+        if (watch.mode === "watch" || watch.mode === "full")
+            watch.minimize();
+        if (contentStack.currentItem instanceof SearchPage)
+            contentStack.currentItem.focusField();
+        else
+            contentStack.push(searchPage);
+    }
+
+    // The last few searches, newest first.
+    readonly property var recentSearches: {
+        try {
+            const list = JSON.parse(settings.recentSearches);
+            return Array.isArray(list) ? list : [];
+        } catch (e) {
+            return [];
+        }
+    }
+
+    function addRecentSearch(text) {
+        const others = recentSearches.filter(s => s.toLowerCase() !== text.toLowerCase());
+        settings.recentSearches = JSON.stringify([text].concat(others).slice(0, 8));
+    }
+
+    function removeRecentSearch(text) {
+        settings.recentSearches = JSON.stringify(recentSearches.filter(s => s !== text));
+    }
+
     // 0 Home, 1 Library, 2 External, 3 Settings, as in the rail.
     function showTab(index) {
         rail.currentIndex = index;
@@ -115,6 +144,8 @@ ApplicationWindow {
         property real volume: 100
         property int skipSeconds: 10
         property bool autoplay: true
+        // A JSON list (QSettings would turn a one-item list into a plain string).
+        property string recentSearches: "[]"
     }
 
     FileDialog {
@@ -131,6 +162,11 @@ ApplicationWindow {
     Shortcut {
         sequences: [StandardKey.Open]
         onActivated: window.openFileDialog()
+    }
+
+    Shortcut {
+        sequences: [StandardKey.Find]
+        onActivated: window.openSearch()
     }
 
     // The library: tabs on the left, pages on the right.
@@ -193,6 +229,10 @@ ApplicationWindow {
     Component {
         id: folderPage
         FolderPage {}
+    }
+    Component {
+        id: searchPage
+        SearchPage {}
     }
 
     DropArea {

@@ -34,8 +34,6 @@ namespace {
 
 constexpr int kShelfSize = 20;
 constexpr int kQuickPicks = 16;
-// Under this many seconds in, a video doesn't count as started.
-constexpr double kMinProgress = 10;
 
 const QString kFoldersKey = QStringLiteral("library/folders");
 
@@ -94,6 +92,19 @@ std::pair<int, int> episodeOf(const QString &name)
     return {-1, -1};
 }
 
+// The year in a name: "Speed (1994)", "Ne Zha 2019 1080p" or "Capture 2025-04-23"; 0 if
+// none. Not a resolution ("1920x1080", "1080p"). With several, the last one: "Blade Runner
+// 2049 (2017)" is from 2017.
+int yearIn(const QString &name)
+{
+    static const QRegularExpression pattern(QStringLiteral("(?<![\\dx])(19[2-9]\\d|20[0-4]\\d)(?![\\dpx])"),
+                                            QRegularExpression::CaseInsensitiveOption);
+    int year = 0;
+    for (const QRegularExpressionMatch &match : pattern.globalMatch(name))
+        year = match.captured(1).toInt();
+    return year;
+}
+
 QList<VideoInfo> scanFolder(const QString &root, bool external, const QString &driveId)
 {
     QList<VideoInfo> videos;
@@ -110,8 +121,10 @@ QList<VideoInfo> scanFolder(const QString &root, bool external, const QString &d
         video.key = external ? QStringLiteral("drive:%1/%2").arg(driveId, video.path.mid(prefix.size()))
                              : video.path;
         video.title = prettyTitle(file.completeBaseName());
+        video.year = yearIn(file.completeBaseName());
         video.dir = file.absolutePath();
         video.root = root;
+        video.type = file.suffix().toLower();
         video.external = external;
         video.size = file.size();
         video.modified = file.lastModified();
@@ -443,7 +456,14 @@ void VideoLibrary::rebuild()
             VideoInfo v = found;
             const QJsonObject meta = m_metadata.value(cacheKey(v)).toObject();
             v.duration = meta.value(QStringLiteral("duration")).toDouble();
+            v.width = meta.value(QStringLiteral("w")).toInt();
+            v.height = meta.value(QStringLiteral("h")).toInt();
+            if (v.year == 0)
+                v.year = meta.value(QStringLiteral("year")).toInt();
             v.hasThumbnail = meta.value(QStringLiteral("thumb")).toBool() && QFile::exists(thumbnailFile(v));
+            v.titleKey = searchKey(v.title);
+            const QString inside = v.dir == v.root ? QString() : v.dir.mid(withSlash(v.root).size());
+            v.placeKey = searchKey(inside + QLatin1Char(' ') + sourceName(v.root));
 
             const QJsonObject seen = m_history.value(v.key).toObject();
             if (!seen.isEmpty()) {
@@ -481,13 +501,14 @@ void VideoLibrary::queueThumbnails()
             continue;
         queued.insert(i);
         const VideoInfo &v = m_videos[i];
-        const bool known = m_metadata.contains(cacheKey(v));
-        if (!known || (m_metadata.value(cacheKey(v)).toObject().value(QStringLiteral("thumb")).toBool() && !v.hasThumbnail))
+        const QJsonObject meta = m_metadata.value(cacheKey(v)).toObject();
+        // Looked at again when the cache is from before sizes were kept ("w").
+        if (!meta.contains(QStringLiteral("w")) || (meta.value(QStringLiteral("thumb")).toBool() && !v.hasThumbnail))
             m_thumbnailer->request(v.path, thumbnailFile(v));
     }
 }
 
-void VideoLibrary::onThumbnailFinished(const QString &path, bool ok, double duration)
+void VideoLibrary::onThumbnailFinished(const QString &path, bool ok, double duration, int width, int height, int year)
 {
     const int index = m_byPath.value(path, -1);
     // Gone, e.g. the drive was unplugged mid-grab: don't remember it as unreadable.
@@ -496,8 +517,13 @@ void VideoLibrary::onThumbnailFinished(const QString &path, bool ok, double dura
     VideoInfo &v = m_videos[index];
     if (duration > 0)
         v.duration = duration;
+    v.width = width;
+    v.height = height;
+    if (v.year == 0)
+        v.year = year;
     v.hasThumbnail = ok;
-    m_metadata.insert(cacheKey(v), QJsonObject{{"duration", v.duration}, {"thumb", ok}});
+    m_metadata.insert(cacheKey(v), QJsonObject{{"duration", v.duration}, {"thumb", ok},
+                                               {"w", width}, {"h", height}, {"year", year}});
     scheduleSave();
     emit videoChanged(index);
 }
@@ -573,6 +599,12 @@ FolderModel *VideoLibrary::foldersIn(const QString &folder)
     m_folderModels.removeAll(nullptr);
     m_folderModels.append(model);
     return model;   // owned by QML (no parent)
+}
+
+void VideoLibrary::track(VideoModel *model)
+{
+    m_folderVideoModels.removeAll(nullptr);
+    m_folderVideoModels.append(model);
 }
 
 QList<int> VideoLibrary::indexesIn(const QString &folder) const

@@ -61,6 +61,10 @@ playing asks first.
 | I | Mini player, and back |
 | Esc | Leave full screen, or shrink to the mini player |
 | Ctrl+O | Open a file (drag & drop also works) |
+| Ctrl+F | Search |
+
+Below the video, the file's details read like "MP4 • H.264 (AVC) • 1920 × 1080 • 23.98 fps • 1.4 GB":
+the file type, compression standard, size in pixels, frame rate and file size.
 
 ### Subtitles
 
@@ -76,14 +80,27 @@ file, and can add a subtitle file by hand.
 
 The app scans your Videos folder in the background (empty files, such as unfinished
 downloads, are skipped). For each video, a headless libmpv instance grabs a frame 20% in
-and reads the duration. Both are cached, so later launches are instant.
+and reads the duration, size in pixels and any release-date tag. All are cached, so later
+launches are instant.
+
+Every Library and folder page has a **sort** menu (Name, Recently added, Recently watched,
+Release year, Longest first, Largest first) and **filters** (Length, Progress, Type, Resolution).
+Sorting by anything but Name, or filtering, lists every video in the folder and its sub-folders
+in one grid. The release year comes from the file name ("Speed (1994)", "Ne Zha 2019 1080p"), or
+failing that from the file's tags.
+
+**Search** (the magnifier on Home and Library, or Ctrl+F) looks through the library and connected
+drives by title and folder name, ignoring case, accents and punctuation. Titles that start with
+what you typed come first, then titles that contain it, then videos whose title and folders
+contain every word ("house season 2"). It has the same sort and filters, and remembers your
+last few searches.
 
 App data lives in `%LOCALAPPDATA%\BetterVideoPlayer`:
 
 - `thumbnails\`: JPEG thumbnails, named by a hash of path, size and modified time
-- `metadata.json`: durations, and which files could not be thumbnailed
+- `metadata.json`: durations, sizes and tagged years, and which files could not be thumbnailed
 - `history.json`: how far each video was watched (for Continue watching and resume)
-- `settings.ini`: the volume
+- `settings.ini`: the volume, other settings, and recent searches
 
 Delete `metadata.json` and `thumbnails\` to rebuild the thumbnails.
 
@@ -94,6 +111,8 @@ Delete `metadata.json` and `thumbnails\` to rebuild the thumbnails.
     draws through mpv's OpenGL render API. Qt Quick is forced onto OpenGL in `main.cpp`.
   - `VideoLibrary` (QML singleton): scanning, the metadata cache, watch history, and the models.
   - `VideoModel` / `FolderModel`: list models for shelves, folder pages and folder cards.
+  - `VideoQuery`: a `VideoModel` created in QML, with search text, sort and filter properties
+    (behind `FilterBar` and `SearchPage`).
   - `Thumbnailer`: a two-thread pool of headless libmpv instances (`vo=image`).
 - **QML** (`qml/`): `Main` (window, navigation), `HomePage`, `FolderPage`, `WatchView` (the player layer), and
   components (`Shelf`, `VideoCard`, `FolderCard`, `PickRow`, `NavRail`, ...). Colours and radii
