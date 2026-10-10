@@ -825,9 +825,9 @@ QVariantMap VideoLibrary::detailsOf(const QString &path) const
         {"folderLabel", index >= 0 ? locationOf(m_videos[index]) : QDir::toNativeSeparators(file.absolutePath())},
         {"fileName", file.fileName()},
         {"sizeText", locale.formattedDataSize(file.size(), 1, QLocale::DataSizeTraditionalFormat)},
-        {"addedText", added.isValid() ? locale.toString(added.date(), QStringLiteral("d MMM yyyy")) : QString()},
+        {"addedText", formatDateTime(added)},
         // Kept when the file is copied (unlike its creation date), so close to when it was made.
-        {"modifiedText", locale.toString(file.lastModified().date(), QStringLiteral("d MMM yyyy"))},
+        {"modifiedText", formatDateTime(file.lastModified())},
     };
 }
 

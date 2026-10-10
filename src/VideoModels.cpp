@@ -110,6 +110,16 @@ QString folderLabel(const QString &folder, const QString &rootName)
     return parts.size() == 1 ? parts.first() : parts.last() + QStringLiteral(" · ") + parts.first();
 }
 
+QString formatDateTime(const QDateTime &time)
+{
+    if (!time.isValid())
+        return {};
+    const QLocale locale = QLocale::system();
+    const QDateTime local = time.toLocalTime();
+    return locale.toString(local.date(), QStringLiteral("d MMM yyyy")) + QStringLiteral(", ")
+         + locale.toString(local.time(), QLocale::ShortFormat);
+}
+
 QString formatDuration(double seconds)
 {
     if (seconds <= 0)
