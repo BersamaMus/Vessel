@@ -28,6 +28,9 @@ class MpvItem : public QQuickFramebufferObject
     Q_PROPERTY(QString videoFormat READ videoFormat NOTIFY videoInfoChanged)
     // Frames per second, as the file states it; 0 if unknown.
     Q_PROPERTY(double frameRate READ frameRate NOTIFY videoInfoChanged)
+    // When the video was recorded or made, from the file's "creation_time" tag ("29 Jan 2022");
+    // "" if it has none.
+    Q_PROPERTY(QString mediaCreated READ mediaCreated NOTIFY videoInfoChanged)
     // Subtitle tracks: {id, label, external, file, selected}; subtitleId is the shown one, 0 for none.
     Q_PROPERTY(QVariantList subtitleTracks READ subtitleTracks NOTIFY tracksChanged)
     Q_PROPERTY(int subtitleId READ subtitleId NOTIFY tracksChanged)
@@ -50,6 +53,7 @@ public:
     int videoHeight() const { return m_videoHeight; }
     QString videoFormat() const { return m_videoFormat; }
     double frameRate() const { return m_frameRate; }
+    QString mediaCreated() const { return m_mediaCreated; }
     QVariantList subtitleTracks() const { return m_subtitleTracks; }
     int subtitleId() const { return m_subtitleId; }
 
@@ -119,6 +123,7 @@ private:
     int m_videoHeight = 0;
     QString m_videoFormat;
     double m_frameRate = 0;
+    QString m_mediaCreated;
     QVariantList m_subtitleTracks;
     int m_subtitleId = 0;
 };

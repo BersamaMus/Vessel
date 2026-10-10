@@ -157,7 +157,8 @@ public:
     Q_INVOKABLE int videoCountIn(const QString &folder) const;
 
     Q_INVOKABLE QString titleOf(const QString &path) const;
-    // For the watch page: title, folder, folderLabel, fileName, sizeText, addedText, inLibrary, external.
+    // For the watch page: title, folder, folderLabel, fileName, sizeText, addedText, modifiedText,
+    // inLibrary, external.
     Q_INVOKABLE QVariantMap detailsOf(const QString &path) const;
     Q_INVOKABLE QString folderOf(const QString &path) const;
     // The video after this one in its folder, or "" at the end.
