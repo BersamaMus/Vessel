@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QAbstractListModel>
+#include <QDateTime>
 #include <QPointer>
 #include <QQmlParserStatus>
 #include <QStringList>
@@ -195,6 +196,8 @@ private:
 };
 
 QString formatDuration(double seconds);
+// "2 Jan 2022, 2:16 PM" in local time (the clock as the system shows it: 12 or 24 hours).
+QString formatDateTime(const QDateTime &time);
 // Text as search compares it, as Blimp does: lowercase, without accents ("é" is
 // "e"), apostrophes dropped ("Don't" is "dont"), other punctuation as single
 // spaces, and "&" as "and".

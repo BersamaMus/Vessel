@@ -10,6 +10,9 @@
 #include <QQuickOpenGLUtils>
 #include <QTimeZone>
 
+// "2 Jan 2022, 2:16 PM" (VideoModels.cpp; its header needs the whole library).
+QString formatDateTime(const QDateTime &time);
+
 #include <mpv/client.h>
 #include <mpv/render_gl.h>
 
@@ -247,8 +250,7 @@ void MpvItem::processEvents()
                 const QDateTime time = QDateTime::fromString(QString::fromUtf8(value).left(19), Qt::ISODate);
                 mpv_free(value);
                 if (time.isValid() && time.date().year() > 1971)
-                    created = QLocale::system().toString(QDateTime(time.date(), time.time(), QTimeZone::UTC)
-                                                             .toLocalTime().date(), QStringLiteral("d MMM yyyy"));
+                    created = formatDateTime(QDateTime(time.date(), time.time(), QTimeZone::UTC));
             }
             m_mediaCreated = created;
             emit videoInfoChanged();

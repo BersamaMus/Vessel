@@ -28,7 +28,7 @@ class MpvItem : public QQuickFramebufferObject
     Q_PROPERTY(QString videoFormat READ videoFormat NOTIFY videoInfoChanged)
     // Frames per second, as the file states it; 0 if unknown.
     Q_PROPERTY(double frameRate READ frameRate NOTIFY videoInfoChanged)
-    // When the video was recorded or made, from the file's "creation_time" tag ("29 Jan 2022");
+    // When the video was recorded or made, from the file's "creation_time" tag ("29 Jan 2022, 10:23 AM");
     // "" if it has none.
     Q_PROPERTY(QString mediaCreated READ mediaCreated NOTIFY videoInfoChanged)
     // Subtitle tracks: {id, label, external, file, selected}; subtitleId is the shown one, 0 for none.
