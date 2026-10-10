@@ -8,6 +8,8 @@ AbstractButton {
     property string name
     property string countText
     property url thumbnail
+    // The cover is still being made.
+    property bool loading: false
 
     hoverEnabled: true
     focusPolicy: Qt.NoFocus
@@ -55,6 +57,7 @@ AbstractButton {
                 RoundedImage {
                     anchors.fill: parent
                     source: card.thumbnail
+                    loading: card.loading
                     placeholderIcon: "folder"
                 }
 

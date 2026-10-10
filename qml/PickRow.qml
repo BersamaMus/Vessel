@@ -11,6 +11,8 @@ AbstractButton {
     property url thumbnail
     property string durationText
     property real progress: 0
+    // The thumbnail is still being made.
+    property bool loading: false
     property real thumbWidth: 96
     property int titleLines: 1
     // The video that's playing (in the Up next list).
@@ -40,6 +42,7 @@ AbstractButton {
                 anchors.fill: parent
                 source: row.thumbnail
                 radius: row.thumbWidth > 120 ? 10 : 8
+                loading: row.loading
             }
 
             Rectangle {

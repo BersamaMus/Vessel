@@ -4,7 +4,10 @@ import QtQuick.Layouts
 
 // One folder of the library: its sub-folders, then its videos, in grids. Sorting
 // (other than by name) or filtering lists every video in it, sub-folders included.
-ScrollView {
+//
+// The videos are the cells of a GridView, which only makes the cards on screen, so
+// a drive with thousands of videos stays quick; everything above them is its header.
+GridView {
     id: page
 
     // An absolute path, or "" for the whole library (a card per library folder).
@@ -17,14 +20,24 @@ ScrollView {
     readonly property var videos: VideoLibrary.videosIn(folder)
     // A drive's own page leads with what was being watched on it (drive videos stay off Home).
     readonly property var started: VideoLibrary.isDrive(folder) ? VideoLibrary.continueWatchingOn(folder) : null
-    readonly property int columns: Math.max(1, Math.floor((availableWidth - 2 * Theme.pagePadding + gap) / (220 + gap)))
     readonly property real gap: 16
-    readonly property real cardWidth: Math.floor((availableWidth - 2 * Theme.pagePadding - (columns - 1) * gap) / columns)
+    // Cells are a card plus the gap after it, and start at the page padding.
+    readonly property real gridWidth: width - 2 * Theme.pagePadding + gap
+    readonly property int columns: Math.max(1, Math.floor(gridWidth / (220 + gap)))
+    readonly property real cardWidth: Math.floor(gridWidth / columns) - gap
+    readonly property bool filtered: results.length !== "" || results.progress !== ""
+                                     || results.type !== "" || results.resolution !== ""
     // Sorted or filtered: one list of everything in the folder instead of folders, then videos.
-    readonly property bool flat: results.sort !== "name" || filterBar.filtered
+    readonly property bool flat: results.sort !== "name" || filtered
 
-    contentWidth: availableWidth
     clip: true
+    cellWidth: Math.floor(gridWidth / columns)
+    cellHeight: Math.round(cardWidth * 9 / 16) + 52 + gap
+    model: flat ? results : videos
+    boundsBehavior: Flickable.StopAtBounds
+    ScrollBar.vertical: ScrollBar {}
+    // The thumbnails on show are made first.
+    StackView.onActivated: VideoLibrary.prioritize(folder)
 
     VideoQuery {
         id: results
@@ -40,8 +53,32 @@ ScrollView {
         font.weight: Font.Bold
     }
 
-    ColumnLayout {
-        width: page.availableWidth
+    delegate: Item {
+        id: cell
+        required property var model
+        width: page.cellWidth
+        height: page.cellHeight
+
+        VideoCard {
+            x: Theme.pagePadding
+            width: page.cardWidth
+            title: cell.model.title
+            // Sorted or filtered: what it's sorted by, or how far in, or else where it is.
+            subtitle: page.flat ? [cell.model.detail, cell.model.remainingText].filter(part => part).join("  •  ")
+                                  || cell.model.subtitle
+                                : cell.model.remainingText
+            thumbnail: cell.model.thumbnail
+            loading: cell.model.thumbnailPending
+            durationText: cell.model.durationText
+            progress: cell.model.progress
+            onClicked: page.app.play(cell.model.path)
+        }
+    }
+
+    footer: Item { width: page.width; height: 32 }
+
+    header: ColumnLayout {
+        width: page.width
         spacing: 0
 
         RowLayout {
@@ -53,6 +90,7 @@ ScrollView {
 
             IconButton {
                 visible: page.StackView.index > 0
+                Layout.alignment: Qt.AlignTop
                 iconName: "back"
                 tip: qsTr("Back")
                 onClicked: page.StackView.view.pop()
@@ -79,6 +117,11 @@ ScrollView {
                     color: Theme.textSecondary
                     font.pixelSize: 14
                 }
+                WorkProgress {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 6
+                    folder: page.folder
+                }
             }
 
             IconButton {
@@ -90,7 +133,6 @@ ScrollView {
         }
 
         FilterBar {
-            id: filterBar
             Layout.fillWidth: true
             Layout.leftMargin: Theme.pagePadding
             Layout.rightMargin: Theme.pagePadding
@@ -120,29 +162,6 @@ ScrollView {
             text: qsTr("No videos here match these filters.")
         }
 
-        Flow {
-            Layout.fillWidth: true
-            Layout.leftMargin: Theme.pagePadding
-            Layout.rightMargin: Theme.pagePadding
-            visible: page.flat
-            spacing: page.gap
-
-            Repeater {
-                model: page.flat ? results : null
-                delegate: VideoCard {
-                    required property var model
-                    width: page.cardWidth
-                    title: model.title
-                    // What it's sorted by, or how far in, or else where it is.
-                    subtitle: [model.detail, model.remainingText].filter(part => part).join("  •  ") || model.subtitle
-                    thumbnail: model.thumbnail
-                    durationText: model.durationText
-                    progress: model.progress
-                    onClicked: page.app.play(model.path)
-                }
-            }
-        }
-
         // --- Folders, then videos -----------------------------------------
         SectionLabel {
             visible: !page.flat && page.started !== null && page.started.count > 0
@@ -162,6 +181,7 @@ ScrollView {
                 title: model.title
                 subtitle: model.remainingText
                 thumbnail: model.thumbnail
+                loading: model.thumbnailPending
                 durationText: model.durationText
                 progress: model.progress
                 onClicked: page.app.play(model.path)
@@ -188,6 +208,7 @@ ScrollView {
                     name: model.name
                     countText: model.countText
                     thumbnail: model.thumbnail
+                    loading: model.thumbnailPending
                     onClicked: page.app.openFolder(model.folder)
                 }
             }
@@ -197,29 +218,5 @@ ScrollView {
             visible: !page.flat && page.videos.count > 0
             text: qsTr("Videos")
         }
-
-        Flow {
-            Layout.fillWidth: true
-            Layout.leftMargin: Theme.pagePadding
-            Layout.rightMargin: Theme.pagePadding
-            visible: !page.flat && page.videos.count > 0
-            spacing: page.gap
-
-            Repeater {
-                model: page.videos
-                delegate: VideoCard {
-                    required property var model
-                    width: page.cardWidth
-                    title: model.title
-                    subtitle: model.remainingText
-                    thumbnail: model.thumbnail
-                    durationText: model.durationText
-                    progress: model.progress
-                    onClicked: page.app.play(model.path)
-                }
-            }
-        }
-
-        Item { implicitHeight: 32 }
     }
 }

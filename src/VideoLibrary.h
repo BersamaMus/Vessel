@@ -12,6 +12,9 @@
 #include <QVariantList>
 #include <QtQml/qqmlregistration.h>
 
+#include <atomic>
+#include <memory>
+
 #include "VideoModels.h"
 
 class DriveWatcher;
@@ -60,6 +63,8 @@ struct VideoSource
     qint64 bytesFree = 0;
     bool scanning = false;
     bool announce = false;  // say so when its first scan finishes (just plugged in, or added)
+    // Videos found so far by the scan in progress (counted on the scanning thread).
+    std::shared_ptr<std::atomic_int> found = std::make_shared<std::atomic_int>(0);
 };
 
 // The videos in the library folders (the user's Videos folder by default) and
@@ -80,7 +85,12 @@ class VideoLibrary : public QObject
     Q_PROPERTY(QStringList libraryFolders READ libraryFolders NOTIFY libraryFoldersChanged)
     // What the Library tab opens: the one library folder, or "" if there are several.
     Q_PROPERTY(QString libraryHome READ libraryHome NOTIFY libraryFoldersChanged)
-    // Connected drives: {path, name, kind, count, scanning, sizeText, freeText, usedFraction}.
+    // Background work, for progress bars: videos found so far by the scans in progress,
+    // and thumbnails made out of those to make (both 0 when there are none to make).
+    Q_PROPERTY(int videosFound READ videosFound NOTIFY progressChanged)
+    Q_PROPERTY(int thumbnailsDone READ thumbnailsDone NOTIFY progressChanged)
+    Q_PROPERTY(int thumbnailsTotal READ thumbnailsTotal NOTIFY progressChanged)
+    // Connected drives: {path, name, kind, count, scanning, found, sizeText, freeText, usedFraction}.
     Q_PROPERTY(QVariantList drives READ drives NOTIFY drivesChanged)
     Q_PROPERTY(VideoModel *continueWatching READ continueWatching CONSTANT)
     Q_PROPERTY(VideoModel *recentlyAdded READ recentlyAdded CONSTANT)
@@ -92,6 +102,9 @@ public:
     ~VideoLibrary() override;
 
     bool scanning() const { return m_pendingScans > 0; }
+    int videosFound() const;
+    int thumbnailsDone() const { return int(m_thumbBatch.size() - m_thumbPending.size()); }
+    int thumbnailsTotal() const { return int(m_thumbBatch.size()); }
     int count() const { return m_videos.size(); }
     int libraryCount() const;
     QStringList libraryFolders() const;
@@ -119,6 +132,13 @@ public:
     Q_INVOKABLE VideoModel *continueWatchingOn(const QString &drivePath);
     Q_INVOKABLE bool isDrive(const QString &folder) const;
     Q_INVOKABLE QString folderName(const QString &folder) const;
+    // Thumbnails for the videos in a folder (sub-folders included): {done, total}, both
+    // 0 when none are being made.
+    Q_INVOKABLE QVariantMap thumbnailProgressIn(const QString &folder) const;
+    // Makes the thumbnails for a folder's videos next: the one the user is looking at.
+    Q_INVOKABLE void prioritize(const QString &folder);
+    // Whether the video's thumbnail is still to be made (it's showing a placeholder for now).
+    bool thumbnailPending(const QString &path) const { return m_thumbPending.contains(path); }
     Q_INVOKABLE int videoCountIn(const QString &folder) const;
 
     Q_INVOKABLE QString titleOf(const QString &path) const;
@@ -165,6 +185,9 @@ signals:
     void libraryFoldersChanged();
     void drivesChanged();
     void videoChanged(int index);
+    void progressChanged();
+    // Which videos are waiting for a thumbnail has been worked out afresh.
+    void thumbnailsQueued();
     // A drive was plugged in and scanned.
     void driveConnected(const QString &name, const QString &path, int count);
     // A drive is being removed; its videos are still listed while this is handled.
@@ -203,6 +226,16 @@ private:
     // The library before a user-requested rescan, to report what changed (empty: not reporting).
     QSet<QString> m_beforeRescan;
     bool m_reportRescan = false;
+
+    // While scanning, reports how many videos have been found so far.
+    QTimer m_scanProgressTimer;
+
+    // Thumbnails still to make, and every one asked for since there were none to make
+    // (the batch a progress bar counts through). Video paths.
+    QSet<QString> m_thumbPending;
+    QSet<QString> m_thumbBatch;
+    QString m_priorityFolder;   // its thumbnails go first ("" for the library), if m_hasPriority
+    bool m_hasPriority = false;
 
     QList<VideoInfo> m_videos;
     QHash<QString, int> m_byPath;

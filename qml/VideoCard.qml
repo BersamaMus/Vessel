@@ -11,6 +11,8 @@ AbstractButton {
     property url thumbnail
     property string durationText
     property real progress: 0
+    // The thumbnail is still being made.
+    property bool loading: false
 
     hoverEnabled: true
     focusPolicy: Qt.NoFocus
@@ -33,6 +35,7 @@ AbstractButton {
             RoundedImage {
                 anchors.fill: parent
                 source: card.thumbnail
+                loading: card.loading
             }
 
             Rectangle {

@@ -1,6 +1,8 @@
 #pragma once
 
+#include <QMutex>
 #include <QObject>
+#include <QSet>
 #include <QThreadPool>
 
 #include <atomic>
@@ -15,7 +17,8 @@ public:
     explicit Thumbnailer(QObject *parent = nullptr);
     ~Thumbnailer() override;
 
-    // Saves a JPEG of `videoPath` to `outputFile`; emits finished() when done.
+    // Saves a JPEG of `videoPath` to `outputFile`; emits finished() when done. Requests
+    // run in the order made; one for a video that's already being done is ignored.
     void request(const QString &videoPath, const QString &outputFile);
     // Drops queued requests (running ones still finish).
     void clear();
@@ -28,4 +31,6 @@ signals:
 private:
     QThreadPool m_pool;
     std::atomic_bool m_stopping = false;
+    QMutex m_mutex;
+    QSet<QString> m_running;   // guarded by m_mutex
 };

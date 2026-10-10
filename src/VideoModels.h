@@ -32,6 +32,7 @@ public:
         RemainingTextRole,
         FinishedRole,
         DetailRole,   // what the list is sorted by, where it isn't shown already ("1994", "1.2 GB")
+        ThumbnailPendingRole,   // the thumbnail is still to be made
     };
 
     using Source = std::function<QList<int>()>;
@@ -161,6 +162,7 @@ public:
         CountRole,
         CountTextRole,
         ThumbnailRole,
+        ThumbnailPendingRole,   // the cover is still to be made
     };
 
     enum Mode { Children, TopFolders };

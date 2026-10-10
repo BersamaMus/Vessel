@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFile>
 #include <QTemporaryDir>
+#include <QThread>
 
 #include <mpv/client.h>
 
@@ -117,7 +118,8 @@ GrabResult grabFrame(const QString &videoPath, const QString &outputFile, const 
 Thumbnailer::Thumbnailer(QObject *parent)
     : QObject(parent)
 {
-    m_pool.setMaxThreadCount(2);
+    // Each grab decodes one frame, mostly waiting on the disk; a few at once keep a big drive moving.
+    m_pool.setMaxThreadCount(qBound(2, QThread::idealThreadCount() / 2, 4));
 }
 
 Thumbnailer::~Thumbnailer()
@@ -129,10 +131,25 @@ Thumbnailer::~Thumbnailer()
 
 void Thumbnailer::request(const QString &videoPath, const QString &outputFile)
 {
+    {
+        QMutexLocker lock(&m_mutex);
+        if (m_running.contains(videoPath))
+            return;
+    }
     m_pool.start([this, videoPath, outputFile] {
         if (m_stopping)
             return;
+        {
+            QMutexLocker lock(&m_mutex);
+            if (m_running.contains(videoPath))   // requested twice while queued
+                return;
+            m_running.insert(videoPath);
+        }
         const GrabResult result = grabFrame(videoPath, outputFile, m_stopping);
+        {
+            QMutexLocker lock(&m_mutex);
+            m_running.remove(videoPath);
+        }
         if (!m_stopping)
             emit finished(videoPath, result.ok, result.duration, result.width, result.height, result.year);
     });

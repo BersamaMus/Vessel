@@ -60,13 +60,20 @@ ScrollView {
                     elide: Text.ElideRight
                 }
                 Text {
-                    text: card.modelData.scanning ? qsTr("Looking for videos…")
+                    text: card.modelData.scanning
+                          ? (card.modelData.found > 0 ? qsTr("Looking for videos…  %1 found").arg(card.modelData.found)
+                                                      : qsTr("Looking for videos…"))
                         : card.modelData.count === 0 ? qsTr("No videos found")
                         : card.modelData.count === 1 ? qsTr("1 video")
                         : qsTr("%1 videos").arg(card.modelData.count)
                     color: card.modelData.count > 0 ? Theme.accent : Theme.textSecondary
                     font.pixelSize: 14
                     font.weight: Font.DemiBold
+                }
+                WorkProgress {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 4
+                    folder: card.modelData.path
                 }
                 Rectangle {
                     Layout.fillWidth: true
