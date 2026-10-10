@@ -8,6 +8,7 @@
 #include <QOpenGLFramebufferObject>
 #include <QPointer>
 #include <QQuickOpenGLUtils>
+#include <QTimeZone>
 
 #include <mpv/client.h>
 #include <mpv/render_gl.h>
@@ -238,7 +239,19 @@ void MpvItem::processEvents()
             }
             break;
         }
-        case MPV_EVENT_FILE_LOADED:
+        case MPV_EVENT_FILE_LOADED: {
+            // "2022-01-29T10:23:57.000000Z". Files without one sometimes carry 1904 or
+            // 1970 (an unset date counted from zero): those don't count.
+            QString created;
+            if (char *value = mpv_get_property_string(m_mpv, "metadata/by-key/creation_time")) {
+                const QDateTime time = QDateTime::fromString(QString::fromUtf8(value).left(19), Qt::ISODate);
+                mpv_free(value);
+                if (time.isValid() && time.date().year() > 1971)
+                    created = QLocale::system().toString(QDateTime(time.date(), time.time(), QTimeZone::UTC)
+                                                             .toLocalTime().date(), QStringLiteral("d MMM yyyy"));
+            }
+            m_mediaCreated = created;
+            emit videoInfoChanged();
             m_loaded = true;
             emit loadedChanged();
             // The first matching subtitle file is shown; the rest are just listed.
@@ -246,6 +259,7 @@ void MpvItem::processEvents()
                 command({"sub-add", m_subtitlesToAdd[i], i == 0 ? QStringLiteral("select") : QStringLiteral("auto")});
             m_subtitlesToAdd.clear();
             break;
+        }
         case MPV_EVENT_END_FILE: {
             auto *end = static_cast<mpv_event_end_file *>(event->data);
             if (end->reason == MPV_END_FILE_REASON_ERROR)
@@ -368,6 +382,10 @@ void MpvItem::stop()
 void MpvItem::load(const QString &path, double startSeconds, const QStringList &subtitles)
 {
     m_subtitlesToAdd = subtitles;
+    if (!m_mediaCreated.isEmpty()) {   // not the last file's, while this one loads
+        m_mediaCreated.clear();
+        emit videoInfoChanged();
+    }
     if (m_loaded) {
         m_loaded = false;
         emit loadedChanged();

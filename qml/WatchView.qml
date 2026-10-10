@@ -452,9 +452,15 @@ Item {
 
             Text {
                 Layout.fillWidth: true
-                text: [watch.details.folderLabel, watch.formatTime(mpv.duration),
-                       watch.details.addedText ? qsTr("Added %1").arg(watch.details.addedText) : ""]
-                      .filter(part => part).join("  •  ")
+                // Created: when it was recorded or made (its media-created tag, or else the
+                // modified date, which copying keeps). Added: when the file arrived here.
+                text: {
+                    const created = mpv.loaded ? (mpv.mediaCreated || watch.details.modifiedText || "") : "";
+                    return [watch.details.folderLabel, watch.formatTime(mpv.duration),
+                            created ? qsTr("Created %1").arg(created) : "",
+                            watch.details.addedText ? qsTr("Added %1").arg(watch.details.addedText) : ""]
+                           .filter(part => part).join("  •  ");
+                }
                 color: Theme.textSecondary
                 font.pixelSize: 14
                 elide: Text.ElideRight
