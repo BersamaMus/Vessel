@@ -35,13 +35,20 @@ ApplicationWindow {
     }
 
     // The search page, over whichever page is showing (or back to it, if it already is).
+    // It searches what that tab is about: on External, the drive being looked at (or
+    // every drive, from the list of them); anywhere else, the library.
     function openSearch() {
         if (watch.mode === "watch" || watch.mode === "full")
             watch.minimize();
-        if (contentStack.currentItem instanceof SearchPage)
-            contentStack.currentItem.focusField();
-        else
-            contentStack.push(searchPage);
+        const current = contentStack.currentItem;
+        if (current instanceof SearchPage) {
+            current.focusField();
+            return;
+        }
+        let scope = "library";
+        if (rail.currentIndex === 2)
+            scope = VideoLibrary.driveOf(current.folder ?? "") || "drives";
+        contentStack.push(searchPage, { scope: scope });
     }
 
     // The last few searches, newest first.

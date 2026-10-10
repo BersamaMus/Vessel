@@ -1,8 +1,12 @@
 import QtQuick
-import QtQuick.Effects
+import QtQuick.Shapes
 
 // A thumbnail with rounded corners; shows a placeholder until it has loaded,
 // pulsing while the thumbnail is still being made.
+//
+// The image fills a rounded Shape directly (ShapePath.fillItem), cropped to cover
+// it. Unlike a mask effect, that needs no offscreen layers per card, which matters
+// with a screenful of them being made and dropped while scrolling.
 Item {
     id: root
 
@@ -33,36 +37,38 @@ Item {
         }
     }
 
+    // Laid out to cover the box (scaled up, centred, overflowing it); the Shape below
+    // shows the part inside the rounded corners.
     Image {
         id: image
-        anchors.fill: parent
+
+        readonly property real coverScale: implicitWidth > 0 ? Math.max(root.width / implicitWidth, root.height / implicitHeight) : 1
+
         source: root.source
-        fillMode: Image.PreserveAspectCrop
         asynchronous: true
-        sourceSize.width: 480
+        // Decoded about as big as it's shown (in 80 px steps, so a resize rarely reloads it),
+        // rather than at the thumbnail's full 480 px.
+        sourceSize.width: Math.min(480, Math.max(80, Math.ceil(root.width * Screen.devicePixelRatio / 80) * 80))
+        width: implicitWidth * coverScale
+        height: implicitHeight * coverScale
+        x: (root.width - width) / 2
+        y: (root.height - height) / 2
         visible: false
     }
 
-    MultiEffect {
+    Shape {
         anchors.fill: parent
-        source: image
-        maskEnabled: true
-        maskSource: mask
-        maskThresholdMin: 0.5
-        maskSpreadAtMin: 1.0
+        preferredRendererType: Shape.CurveRenderer
         opacity: image.status === Image.Ready ? 1 : 0
         Behavior on opacity { NumberAnimation { duration: 200 } }
-    }
 
-    Item {
-        id: mask
-        anchors.fill: parent
-        layer.enabled: true
-        layer.smooth: true
-        visible: false
-        Rectangle {
-            anchors.fill: parent
-            radius: root.radius
+        ShapePath {
+            strokeWidth: -1
+            fillItem: image
+            // From the decoded image's pixels to where the image is laid out.
+            fillTransform: PlanarTransform.fromTranslate(image.x, image.y).times(
+                               PlanarTransform.fromScale(image.coverScale, image.coverScale))
+            PathRectangle { width: root.width; height: root.height; radius: root.radius }
         }
     }
 }

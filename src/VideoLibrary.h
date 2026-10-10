@@ -30,6 +30,8 @@ struct VideoInfo
     // external drives the drive's id plus the path on the drive, so it survives
     // the drive getting a different letter.
     QString key;
+    // Names its thumbnail and cached metadata; changes when the file does (see cacheKeyOf).
+    QString cacheKey;
     QString title;
     QString dir;        // absolute folder the file is in
     QString root;       // the library folder or drive it was found under
@@ -49,6 +51,17 @@ struct VideoInfo
     double position = 0;    // last watched position, seconds
     qint64 watchedAt = 0;   // ms since epoch; 0 if never watched
     bool finished = false;
+};
+
+// What's been learned about a video file (metadata.json), by its cache key.
+struct VideoMeta
+{
+    double duration = 0;
+    int width = 0;
+    int height = 0;
+    int year = 0;          // from its tags
+    bool thumb = false;    // a thumbnail was made
+    bool probed = false;   // looked at since sizes were kept (older caches lack them)
 };
 
 // Where videos come from: a library folder, or a connected external drive.
@@ -131,6 +144,8 @@ public:
     // Started, unfinished videos on one drive, most recently watched first.
     Q_INVOKABLE VideoModel *continueWatchingOn(const QString &drivePath);
     Q_INVOKABLE bool isDrive(const QString &folder) const;
+    // The connected drive a folder is on ("E:/"), or "" if it isn't on one.
+    Q_INVOKABLE QString driveOf(const QString &folder) const;
     Q_INVOKABLE QString folderName(const QString &folder) const;
     // Thumbnails for the videos in a folder (sub-folders included): {done, total}, both
     // 0 when none are being made.
@@ -212,7 +227,6 @@ private:
     int sourceIndex(const QString &path) const;
     QString sourceName(const QString &path) const;
     QString keyFor(const QString &path) const;
-    QString cacheKey(const VideoInfo &video) const;
     QString thumbnailFile(const VideoInfo &video) const;
     void saveLibraryFolders();
     void loadState();
@@ -229,6 +243,8 @@ private:
 
     // While scanning, reports how many videos have been found so far.
     QTimer m_scanProgressTimer;
+    // Reports thumbnails made, at most a few times a second.
+    QTimer m_progressTimer;
 
     // Thumbnails still to make, and every one asked for since there were none to make
     // (the batch a progress bar counts through). Video paths.
@@ -241,7 +257,9 @@ private:
     QHash<QString, int> m_byPath;
     quint32 m_pickSeed = 0;
 
-    QJsonObject m_metadata;   // cache key -> {duration, thumb, w, h, year}
+    QHash<QString, VideoMeta> m_metadata;   // by cache key
+    QSet<QString> m_thumbFiles;             // cache keys with a thumbnail file on disk
+    bool m_metadataChanged = false;         // since it was last saved
     QJsonObject m_history;    // video key -> {position, duration, watchedAt, finished}
     QTimer m_saveTimer;
 

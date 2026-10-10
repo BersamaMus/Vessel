@@ -157,6 +157,10 @@ void VideoModel::refresh()
     const bool countChanges = rows.size() != m_rows.size();
     beginResetModel();
     m_rows = std::move(rows);
+    m_rowOf.clear();
+    m_rowOf.reserve(m_rows.size());
+    for (int row = 0; row < m_rows.size(); ++row)
+        m_rowOf.insert(m_rows[row], row);
     endResetModel();
     if (countChanges)
         emit countChanged();
@@ -164,9 +168,9 @@ void VideoModel::refresh()
 
 void VideoModel::onVideoChanged(int libraryIndex)
 {
-    for (int row = 0; row < m_rows.size(); ++row)
-        if (m_rows[row] == libraryIndex)
-            emit dataChanged(index(row), index(row));
+    const int row = m_rowOf.value(libraryIndex, -1);
+    if (row >= 0)
+        emit dataChanged(index(row), index(row));
 }
 
 int VideoModel::rowCount(const QModelIndex &parent) const
@@ -268,15 +272,6 @@ void VideoQuery::set(QString &member, const QString &value)
     update();
 }
 
-void VideoQuery::setEverywhere(bool everywhere)
-{
-    if (m_everywhere == everywhere)
-        return;
-    m_everywhere = everywhere;
-    emit queryChanged();
-    update();
-}
-
 void VideoQuery::setSort(const QString &sort)
 {
     set(m_sort, sort);
@@ -308,7 +303,7 @@ QList<int> VideoQuery::find()
     QStringList types;
     for (int i = 0; i < lib->count(); ++i) {
         const VideoInfo &v = lib->video(i);
-        const bool inScope = m_folder.isEmpty() ? m_everywhere || !v.external
+        const bool inScope = m_folder.isEmpty() ? v.external == (m_source == QLatin1String("drives"))
                                                 : v.dir == m_folder || v.dir.startsWith(prefix);
         if (!inScope)
             continue;
@@ -395,12 +390,15 @@ FolderModel::FolderModel(VideoLibrary *library, const QString &parentFolder, Mod
     , m_mode(mode)
 {
     // Covers fill in as thumbnails are made.
-    const auto coversChanged = [this] {
+    connect(library, &VideoLibrary::videoChanged, this, [this](int libraryIndex) {
+        for (int row = 0; row < m_entries.size(); ++row)
+            if (m_entries[row].cover == libraryIndex)
+                emit dataChanged(index(row), index(row), {ThumbnailRole, ThumbnailPendingRole});
+    });
+    connect(library, &VideoLibrary::thumbnailsQueued, this, [this] {
         if (!m_entries.isEmpty())
-            emit dataChanged(index(0), index(m_entries.size() - 1), {ThumbnailRole, ThumbnailPendingRole});
-    };
-    connect(library, &VideoLibrary::videoChanged, this, coversChanged);
-    connect(library, &VideoLibrary::thumbnailsQueued, this, coversChanged);
+            emit dataChanged(index(0), index(m_entries.size() - 1), {ThumbnailPendingRole});
+    });
     refresh();
 }
 

@@ -101,24 +101,39 @@ ScrollView {
         width: page.availableWidth
         spacing: 0
 
-        ColumnLayout {
+        RowLayout {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.pagePadding
             Layout.rightMargin: Theme.pagePadding
             Layout.topMargin: 14
-            spacing: 2
+            spacing: 8
 
-            Text {
-                text: qsTr("External")
-                color: Theme.textPrimary
-                font.pixelSize: 26
-                font.weight: Font.ExtraBold
-                font.letterSpacing: -0.5
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 2
+
+                Text {
+                    Layout.fillWidth: true   // lets the column grow, putting search at the far right
+                    text: qsTr("External")
+                    color: Theme.textPrimary
+                    font.pixelSize: 26
+                    font.weight: Font.ExtraBold
+                    font.letterSpacing: -0.5
+                }
+                Text {
+                    text: qsTr("USB drives, external hard drives and memory cards")
+                    color: Theme.textSecondary
+                    font.pixelSize: 14
+                }
             }
-            Text {
-                text: qsTr("USB drives, external hard drives and memory cards")
-                color: Theme.textSecondary
-                font.pixelSize: 14
+
+            // Searches every connected drive.
+            IconButton {
+                Layout.alignment: Qt.AlignTop
+                visible: VideoLibrary.drives.length > 0
+                iconName: "search"
+                tip: qsTr("Search your drives (Ctrl+F)")
+                onClicked: page.app.openSearch()
             }
         }
 

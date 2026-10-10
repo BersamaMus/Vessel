@@ -28,6 +28,15 @@ cmake --build --preset debug
 The post-build step copies `libmpv-2.dll` and runs `windeployqt`, so the build folder runs as-is.
 You can also open the folder directly in Visual Studio or Qt Creator. Both pick up `CMakePresets.json`.
 
+The **Release** build is several times faster than Debug at scanning and searching (Debug Qt
+and libmpv checks are slow): use it for everyday watching, and Debug for development.
+
+For testing and profiling:
+
+- `BVP_DATA_DIR=<folder>` points the app at its own settings, history and thumbnail cache, so a
+  test copy can't touch your real ones.
+- `QT_LOGGING_RULES=bvp.perf.debug=true` logs how long scans and library updates take.
+
 ## The player
 
 Playing a video opens the **watch page**: the video, its details below, and on the right the
@@ -119,7 +128,11 @@ Delete `metadata.json` and `thumbnails\` to rebuild the thumbnails.
   - `VideoModel` / `FolderModel`: list models for shelves, folder pages and folder cards.
   - `VideoQuery`: a `VideoModel` created in QML, with search text, sort and filter properties
     (behind `FilterBar` and `SearchPage`).
-  - `Thumbnailer`: a small thread pool (2 to 4) of headless libmpv instances (`vo=image`).
+  - `Thumbnailer`: 2 to 4 worker processes (the app run as `BetterVideoPlayer --thumbnail-worker`),
+    each grabbing one frame at a time with headless libmpv (`vo=image`) and answering over
+    stdin/stdout. A file that crashes the decoder only takes its worker down (the file is then
+    remembered as unreadable), one taking over 45 s is killed, and workers exit when the queue
+    is empty so their memory goes too. If workers can't start, it falls back to threads.
 - **QML** (`qml/`): `Main` (window, navigation), `HomePage`, `FolderPage`, `WatchView` (the player layer), and
   components (`Shelf`, `VideoCard`, `FolderCard`, `PickRow`, `NavRail`, ...). Colours and radii
   live in `Theme.qml`. Icons are Material Icons (Apache 2.0) path data in `Icons.js`, drawn with
