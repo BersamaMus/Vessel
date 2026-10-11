@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QFileInfo>
+#include <QHash>
 #include <QLocale>
 #include <QOpenGLContext>
 #include <QOpenGLFramebufferObject>
@@ -18,6 +19,7 @@ QString formatDateTime(const QDateTime &time);
 #include <mpv/client.h>
 #include <mpv/render_gl.h>
 
+#include <algorithm>
 #include <vector>
 
 namespace {
@@ -63,6 +65,43 @@ QString languageName(const QString &code)
         return {};
     const QLocale::Language language = QLocale::codeToLanguage(code, QLocale::AnyLanguageCode);
     return language == QLocale::AnyLanguage ? code : QLocale::languageToString(language);
+}
+
+// "English · 5.1 · AC-3", "Director's commentary (English) · Stereo": what tells a file's
+// audio tracks apart.
+QString audioLabel(const QVariantMap &track)
+{
+    const int id = track.value(QStringLiteral("id")).toInt();
+    const QString language = languageName(track.value(QStringLiteral("lang")).toString());
+    QString name = track.value(QStringLiteral("title")).toString();
+    if (name.isEmpty())
+        name = language;
+    else if (!language.isEmpty() && !name.contains(language, Qt::CaseInsensitive))
+        name += QStringLiteral(" (%1)").arg(language);
+    if (name.isEmpty())
+        name = MpvItem::tr("Track %1").arg(id);
+
+    QStringList parts{name};
+    const int channels = track.value(QStringLiteral("demux-channel-count")).toInt();
+    if (channels == 1)
+        parts.append(MpvItem::tr("Mono"));
+    else if (channels == 2)
+        parts.append(MpvItem::tr("Stereo"));
+    else if (channels == 6)
+        parts.append(QStringLiteral("5.1"));
+    else if (channels == 8)
+        parts.append(QStringLiteral("7.1"));
+    else if (channels > 0)
+        parts.append(MpvItem::tr("%1 channels").arg(channels));
+    static const QHash<QString, QString> codecs = {
+        {"aac", "AAC"}, {"ac3", "AC-3"}, {"eac3", "E-AC-3"}, {"dts", "DTS"}, {"truehd", "TrueHD"},
+        {"flac", "FLAC"}, {"opus", "Opus"}, {"vorbis", "Vorbis"}, {"mp3", "MP3"}, {"mp2", "MP2"},
+        {"pcm_s16le", "PCM"}, {"pcm_s24le", "PCM"}, {"alac", "ALAC"},
+    };
+    const QString codec = track.value(QStringLiteral("codec")).toString();
+    if (!codec.isEmpty())
+        parts.append(codecs.value(codec, codec.toUpper()));
+    return parts.join(QStringLiteral("  ·  "));
 }
 
 } // namespace
@@ -150,6 +189,8 @@ MpvItem::MpvItem(QQuickItem *parent)
     mpv_set_option_string(m_mpv, "vo", "libmpv");
     mpv_set_option_string(m_mpv, "hwdec", "auto-safe");
     mpv_set_option_string(m_mpv, "keep-open", "yes");   // stay on the last frame at the end
+    // Volume goes up to 200% (as in VLC); past 100% mpv amplifies the sound.
+    mpv_set_option_string(m_mpv, "volume-max", "200");
     mpv_set_option_string(m_mpv, "ytdl", "no");         // offline player
     mpv_set_option_string(m_mpv, "input-default-bindings", "no");
     mpv_set_option_string(m_mpv, "input-vo-keyboard", "no");
@@ -168,6 +209,7 @@ MpvItem::MpvItem(QQuickItem *parent)
     mpv_observe_property(m_mpv, 0, "eof-reached", MPV_FORMAT_FLAG);
     mpv_observe_property(m_mpv, 0, "volume", MPV_FORMAT_DOUBLE);
     mpv_observe_property(m_mpv, 0, "mute", MPV_FORMAT_FLAG);
+    mpv_observe_property(m_mpv, 0, "speed", MPV_FORMAT_DOUBLE);
     mpv_observe_property(m_mpv, 0, "media-title", MPV_FORMAT_STRING);
     mpv_observe_property(m_mpv, 0, "width", MPV_FORMAT_INT64);
     mpv_observe_property(m_mpv, 0, "height", MPV_FORMAT_INT64);
@@ -228,6 +270,9 @@ void MpvItem::processEvents()
             } else if (name == "mute" && has) {
                 m_muted = asFlag();
                 emit mutedChanged();
+            } else if (name == "speed" && has) {
+                m_speed = asDouble();
+                emit speedChanged();
             } else if (name == "media-title") {
                 m_title = has ? QString::fromUtf8(*static_cast<char **>(prop->data)) : QString();
                 emit titleChanged();
@@ -300,22 +345,24 @@ void MpvItem::command(const QStringList &args)
     mpv_command_async(m_mpv, 0, argv.data());
 }
 
-void MpvItem::open(const QString &path, double startSeconds, const QStringList &subtitles)
+void MpvItem::open(const QString &path, double startSeconds, const QStringList &subtitles, int audioTrack)
 {
     if (!m_rendererReady) {
         m_pendingPath = path;
         m_pendingStart = startSeconds;
         m_pendingSubtitles = subtitles;
+        m_pendingAudio = audioTrack;
         return;
     }
-    load(path, startSeconds, subtitles);
+    load(path, startSeconds, subtitles, audioTrack);
 }
 
 void MpvItem::onRendererReady()
 {
     m_rendererReady = true;
     if (!m_pendingPath.isEmpty())
-        load(std::exchange(m_pendingPath, QString()), m_pendingStart, std::exchange(m_pendingSubtitles, {}));
+        load(std::exchange(m_pendingPath, QString()), m_pendingStart, std::exchange(m_pendingSubtitles, {}),
+             m_pendingAudio);
 }
 
 void MpvItem::onRendererGone()
@@ -327,9 +374,20 @@ void MpvItem::updateTracks(const QVariantList &tracks)
 {
     QVariantList subtitles;
     int selected = 0;
+    QVariantList audio;
+    int audioSelected = 0;
     for (const QVariant &entry : tracks) {
         const QVariantMap track = entry.toMap();
-        if (track.value(QStringLiteral("type")).toString() != QLatin1String("sub"))
+        const QString type = track.value(QStringLiteral("type")).toString();
+        if (type == QLatin1String("audio")) {
+            const int id = track.value(QStringLiteral("id")).toInt();
+            const bool isSelected = track.value(QStringLiteral("selected")).toBool();
+            if (isSelected)
+                audioSelected = id;
+            audio.append(QVariantMap{{"id", id}, {"label", audioLabel(track)}, {"selected", isSelected}});
+            continue;
+        }
+        if (type != QLatin1String("sub"))
             continue;
         const int id = track.value(QStringLiteral("id")).toInt();
         const bool external = track.value(QStringLiteral("external")).toBool();
@@ -355,12 +413,28 @@ void MpvItem::updateTracks(const QVariantList &tracks)
     }
     m_subtitleTracks = subtitles;
     m_subtitleId = selected;
+    m_audioTracks = audio;
+    m_audioId = audioSelected;
     emit tracksChanged();
+
+    // The track chosen for this video last time, if the file still has it.
+    if (m_wantedAudio > 0 && !audio.isEmpty()) {
+        const int wanted = std::exchange(m_wantedAudio, 0);
+        const bool there = std::any_of(audio.cbegin(), audio.cend(),
+                                       [&](const QVariant &t) { return t.toMap().value(QStringLiteral("id")).toInt() == wanted; });
+        if (there && wanted != audioSelected)
+            setAudioTrack(wanted);
+    }
 }
 
 void MpvItem::setSubtitleTrack(int id)
 {
     command({"set", "sid", id > 0 ? QString::number(id) : QStringLiteral("no")});
+}
+
+void MpvItem::setAudioTrack(int id)
+{
+    command({"set", "aid", QString::number(id)});
 }
 
 void MpvItem::addSubtitleFile(const QString &path, bool select)
@@ -385,7 +459,7 @@ void MpvItem::stop()
     }
 }
 
-void MpvItem::load(const QString &path, double startSeconds, const QStringList &subtitles)
+void MpvItem::load(const QString &path, double startSeconds, const QStringList &subtitles, int audioTrack)
 {
     m_subtitlesToAdd = subtitles;
     if (!m_mediaCreated.isEmpty()) {   // not the last file's, while this one loads
@@ -399,6 +473,10 @@ void MpvItem::load(const QString &path, double startSeconds, const QStringList &
     // "start" is an option that sticks to later files, so always set it.
     const QByteArray start = startSeconds > 0 ? QByteArray::number(startSeconds, 'f', 3) : QByteArray("none");
     mpv_set_option_string(m_mpv, "start", start.constData());
+    // So is "aid" (once a track has been chosen): the file's default, until its tracks are
+    // known and the one asked for turns out to be there (see updateTracks).
+    mpv_set_option_string(m_mpv, "aid", "auto");
+    m_wantedAudio = audioTrack;
     command({"loadfile", path});
     setPaused(false);
 }
@@ -433,10 +511,15 @@ void MpvItem::seekRelative(double seconds)
 
 void MpvItem::setVolume(double volume)
 {
-    command({"set", "volume", QString::number(qBound(0.0, volume, 100.0))});
+    command({"set", "volume", QString::number(qBound(0.0, volume, 200.0))});
 }
 
 void MpvItem::setMuted(bool muted)
 {
     command({"set", "mute", muted ? "yes" : "no"});
+}
+
+void MpvItem::setSpeed(double speed)
+{
+    command({"set", "speed", QString::number(qBound(0.25, speed, 4.0))});
 }

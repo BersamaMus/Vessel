@@ -12,46 +12,29 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-        scrolled: page.contentItem.contentY > 1
+        scrolled: page.contentY > 1
 
         RowLayout {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.pagePadding
-            Layout.rightMargin: Theme.pagePadding
+            Layout.rightMargin: Theme.pagePadding - 8
             Layout.topMargin: 14
             spacing: 8
 
-            ColumnLayout {
-                Layout.fillWidth: true
-                spacing: 2
-
-                Text {
-                    Layout.fillWidth: true   // lets the column grow, putting search at the far right
-                    text: qsTr("External")
-                    color: Theme.textPrimary
-                    font.pixelSize: 26
-                    font.weight: Font.ExtraBold
-                    font.letterSpacing: -0.5
-                }
-                Text {
-                    text: qsTr("USB drives, external hard drives and memory cards")
-                    color: Theme.textSecondary
-                    font.pixelSize: 14
-                }
+            PageTitle {
+                title: qsTr("External")
+                subtitle: qsTr("USB drives, external hard drives and memory cards")
             }
 
-            // Searches every connected drive.
-            IconButton {
-                Layout.alignment: Qt.AlignTop
-                visible: VideoLibrary.drives.length > 0
-                iconName: "search"
-                tip: qsTr("Search your drives (Ctrl+F)")
-                onClicked: page.app.openSearch()
+            // Search looks through every connected drive.
+            AppActions {
+                searchVisible: VideoLibrary.drives.length > 0
+                searchTip: qsTr("Search your drives (Ctrl+F)")
             }
         }
     }
 
-    ScrollView {
+    PageScroll {
         id: page
 
         readonly property var app: ApplicationWindow.window
@@ -60,8 +43,6 @@ Item {
         anchors.right: parent.right
         anchors.top: bar.bottom
         anchors.bottom: parent.bottom
-        contentWidth: availableWidth
-        clip: true
 
         component DriveCard: AbstractButton {
             id: card
@@ -75,11 +56,15 @@ Item {
             onClicked: page.app.openFolder(modelData.path)
 
             HoverHandler { cursorShape: Qt.PointingHandCursor }
+            TapHandler {
+                acceptedButtons: Qt.RightButton
+                onTapped: page.app.showFolderMenu(card.modelData.path)
+            }
 
             background: Rectangle {
                 radius: Theme.radiusCard
-                color: card.pressed ? "#262626" : card.hovered ? Theme.surfaceHigh : Theme.surface
-                border.color: "#1FFFFFFF"
+                color: card.pressed ? Theme.surfacePressed : card.hovered ? Theme.surfaceHigh : Theme.surface
+                border.color: Theme.borderSoft
             }
 
             contentItem: RowLayout {
@@ -132,7 +117,7 @@ Item {
                         Layout.topMargin: 6
                         implicitHeight: 6
                         radius: 3
-                        color: "#33FFFFFF"
+                        color: Theme.borderStrong
                         Rectangle {
                             width: parent.width * card.modelData.usedFraction
                             height: parent.height
@@ -145,6 +130,17 @@ Item {
                         color: Theme.textTertiary
                         font.pixelSize: 12
                     }
+                }
+
+                IconButton {
+                    Layout.alignment: Qt.AlignTop
+                    Layout.topMargin: -8
+                    Layout.rightMargin: -8
+                    visible: Qt.platform.os === "windows"
+                    iconName: "eject"
+                    iconColor: Theme.textSecondary
+                    tip: qsTr("Eject")
+                    onClicked: page.app.ejectDrive(card.modelData.path)
                 }
             }
         }

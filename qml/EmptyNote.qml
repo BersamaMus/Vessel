@@ -1,12 +1,15 @@
 import QtQuick
 import QtQuick.Layouts
 
-// A quiet message box, for empty sections.
+// A quiet message box, for empty sections, with an optional button ("Open Settings").
 Rectangle {
     id: note
 
     property string iconName: "history"
     property string text
+    property string actionText
+
+    signal actionTriggered()
 
     Layout.fillWidth: true
     Layout.leftMargin: Theme.pagePadding
@@ -19,6 +22,7 @@ Rectangle {
         id: row
         anchors.fill: parent
         anchors.margins: 20
+        anchors.rightMargin: note.actionText !== "" ? 10 : 20
         spacing: 14
 
         Icon {
@@ -31,6 +35,11 @@ Rectangle {
             color: Theme.textSecondary
             font.pixelSize: 14
             wrapMode: Text.Wrap
+        }
+        TextAction {
+            visible: note.actionText !== ""
+            text: note.actionText
+            onClicked: note.actionTriggered()
         }
     }
 }

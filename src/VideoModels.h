@@ -45,6 +45,8 @@ public:
     QHash<int, QByteArray> roleNames() const override;
 
     Q_INVOKABLE QString pathAt(int row) const;
+    // Every video in the list, in order (for Play all).
+    Q_INVOKABLE QStringList paths() const;
     Q_INVOKABLE int indexOf(const QString &path) const;
 
     // Re-reads the list from the library.
@@ -67,6 +69,22 @@ private:
     Source m_source;
     QList<int> m_rows;          // indexes into the library
     QHash<int, int> m_rowOf;    // and back, so one video's change is found at once
+    bool m_stale = false;       // the library was rebuilt since the last refresh
+};
+
+// The watch history: like VideoModel, with the day each was watched as its detail
+// ("Today", "Yesterday", "Monday", "12 Oct 2026"), for grouping by day.
+class HistoryModel : public VideoModel
+{
+    Q_OBJECT
+    QML_ELEMENT
+    QML_UNCREATABLE("Get it from VideoLibrary")
+
+public:
+    HistoryModel(VideoLibrary *library, Source source, QObject *parent = nullptr);
+
+protected:
+    QString detailOf(const VideoInfo &video) const override;
 };
 
 // The videos in a folder and its sub-folders (or the library, or every drive),

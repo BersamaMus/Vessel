@@ -3,7 +3,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 
 // A pill that opens a menu of choices and shows the chosen one: the sort and
-// filter menus. Yellow while a filter is on.
+// filter menus. Purple while a filter is on.
 AbstractButton {
     id: button
 
@@ -33,9 +33,9 @@ AbstractButton {
 
     background: Rectangle {
         radius: height / 2
-        color: button.active ? (button.hovered ? "#47FACC15" : Theme.accentSoft)
+        color: button.active ? (button.hovered ? Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.28) : Theme.accentSoft)
              : button.pressed ? Theme.pressed : button.hovered ? "#29FFFFFF" : Theme.surfaceHigh
-        border.color: button.active ? "#66FACC15" : "transparent"
+        border.color: button.active ? Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.4) : "transparent"
     }
 
     contentItem: Row {

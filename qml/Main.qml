@@ -10,10 +10,15 @@ ApplicationWindow {
     // A file passed on the command line.
     property string startFile
     property alias volume: settings.volume
-    // How far a double-tap (or J / L) skips, in seconds.
+    // How far J and L skip, in seconds.
     property alias skipSeconds: settings.skipSeconds
     // Play the next video in the folder when one ends.
     property alias autoplay: settings.autoplay
+    // Subtitles: size "small" / "medium" / "large" / "xlarge", colour "white" / "yellow",
+    // background "outline" / "box" / "none" (see WatchView.applySubtitleStyle).
+    property alias subtitleSize: settings.subtitleSize
+    property alias subtitleColor: settings.subtitleColor
+    property alias subtitleBackground: settings.subtitleBackground
     readonly property bool isFullScreen: visibility === Window.FullScreen
     // Set once the user has confirmed closing while a video plays.
     property bool closeConfirmed: false
@@ -26,8 +31,58 @@ ApplicationWindow {
     }
     property int visibilityBeforeFullScreen: Window.Windowed
 
+    // One video, on its own: next and previous are its neighbours in its folder.
     function play(path) {
+        watch.playlist = [];
         watch.open(path);
+    }
+
+    // A list of videos, played in turn (Play all), or in a random order (Shuffle).
+    function playAll(paths, name, shuffle) {
+        if (paths.length === 0)
+            return;
+        const list = paths.slice();
+        if (shuffle) {
+            for (let i = list.length - 1; i > 0; --i) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [list[i], list[j]] = [list[j], list[i]];
+            }
+        }
+        watch.openList(list, name, shuffle);
+    }
+
+    // Everything in a folder (and the folders inside it).
+    function playFolder(folder, shuffle) {
+        playAll(VideoLibrary.videoPathsIn(folder), VideoLibrary.folderName(folder), shuffle);
+    }
+
+    // Esc, Alt+Left or the mouse's back button: out of the watch page (or full screen), then
+    // back a page. A page can use it first (Search clears what's typed).
+    function goBack() {
+        if (watch.mode === "full") {
+            watch.exitFull();
+            return;
+        }
+        if (watch.mode === "watch") {
+            watch.minimize();
+            return;
+        }
+        const page = contentStack.currentItem;
+        if (page && typeof page.handleBack === "function" && page.handleBack())
+            return;
+        if (contentStack.depth > 1)
+            contentStack.pop();
+    }
+
+    // A video opened from Explorer while Vessel was already open (see main.cpp): it plays
+    // here, and the window comes to the front.
+    function openFromOutside(path) {
+        if (visibility === Window.Minimized)
+            showNormal();
+        raise();
+        requestActivate();
+        if (path)
+            play(path);
     }
 
     function openFolder(folder) {
@@ -72,7 +127,7 @@ ApplicationWindow {
         settings.recentSearches = JSON.stringify(recentSearches.filter(s => s !== text));
     }
 
-    // 0 Home, 1 Library, 2 External, 3 Smartphone, 4 Settings, as in the rail.
+    // 0 Home, 1 Library, 2 External, 3 Phone, 4 Settings, as in the rail.
     function showTab(index) {
         rail.currentIndex = index;
         contentStack.replace(null, [homePage, libraryPage, externalPage, phonePage, settingsPage][index]);
@@ -82,7 +137,7 @@ ApplicationWindow {
         showTab(1);
     }
 
-    // A drive's (or phone's) videos, from the "connected" notice.
+    // A drive's (or phone's) videos, from the "connected" notice, or one of its folders.
     function openDrive(path) {
         if (watch.mode === "watch" || watch.mode === "full")
             watch.minimize();
@@ -112,6 +167,128 @@ ApplicationWindow {
         fileDialog.open();
     }
 
+
+    function openHistory() {
+        if (watch.mode === "watch" || watch.mode === "full")
+            watch.minimize();
+        contentStack.push(historyPage);
+    }
+
+    // --- A video's menu (right-click), and what's in it ------------------------------
+    function showVideoMenu(path) {
+        videoMenu.path = "";   // read afresh, even for the same video (it may have been marked since)
+        videoMenu.path = path;
+        videoMenu.popup();
+    }
+
+    // Changes to the history say what they did, and can be undone from the notice.
+    function changeHistory(path, watched, message) {
+        const before = VideoLibrary.historyEntry(path);
+        VideoLibrary.setWatched(path, watched);
+        toast(message, { icon: watched ? "check" : "history", actionText: qsTr("Undo"),
+                         action: () => VideoLibrary.restoreHistory(path, before), duration: 6000 });
+    }
+
+    function setWatched(path, watched) {
+        changeHistory(path, watched, watched ? qsTr("Marked as watched") : qsTr("Marked as unwatched"));
+    }
+
+    // Forgets how far it got: it leaves the history and Continue watching.
+    function removeFromHistory(path) {
+        changeHistory(path, false, qsTr("Removed from history"));
+    }
+
+    // --- A folder's (or drive's) menu (right-click) --------------------------------------
+    function showFolderMenu(folder) {
+        folderMenu.folder = "";   // read afresh
+        folderMenu.folder = folder;
+        folderMenu.popup();
+    }
+
+    // "Eject": the player lets go of a video on it first, or Windows would refuse.
+    function ejectDrive(path) {
+        const name = VideoLibrary.folderName(path);
+        const eject = () => {
+            toast(qsTr("Ejecting %1…").arg(name), { busy: true });
+            VideoLibrary.ejectDrive(path);
+        };
+        if (watch.mode !== "closed" && VideoLibrary.driveOf(watch.path) === path) {
+            watch.close();
+            releaseTimer.action = eject;
+            releaseTimer.restart();
+        } else {
+            eject();
+        }
+    }
+
+    // Runs action(wasOpen) once the player has let go of `path`, if it's the video that's
+    // open: the file can't be renamed, moved or deleted while it's being read.
+    function withVideoReleased(path, action) {
+        if (watch.mode === "closed" || watch.path !== path) {
+            action(false);
+            return;
+        }
+        watch.close();   // saves its place first
+        releaseTimer.action = action;
+        releaseTimer.restart();
+    }
+
+    Timer {
+        id: releaseTimer
+        property var action: null
+        interval: 500   // the player closes the file just after stopping
+        onTriggered: action(true)
+    }
+
+    function renameVideo(path) {
+        renameDialog.path = path;
+        renameDialog.open();
+    }
+
+    function finishRename(path, name) {
+        withVideoReleased(path, wasOpen => {
+            const result = VideoLibrary.renameVideo(path, name);
+            if (result.error) {
+                toast(result.error, { icon: "edit" });
+                if (wasOpen)
+                    play(path);
+                return;
+            }
+            toast(qsTr("Renamed to %1").arg(result.path.split("/").pop()), { icon: "edit" });
+            if (wasOpen)
+                play(result.path);   // carries on where it was
+        });
+    }
+
+    // The video being moved, while it was open in the player: it reopens from its new place.
+    property string reopenAfterMove
+
+    function moveVideo(path) {
+        moveDialog.path = path;
+        moveDialog.currentFolder = VideoLibrary.fileUrl(VideoLibrary.folderOf(path));
+        moveDialog.open();
+    }
+
+    // Asks first (deleteDialog), then finishDelete.
+    function deleteVideo(path) {
+        deleteDialog.path = path;
+        deleteDialog.open();
+    }
+
+    function finishDelete(path) {
+        const name = path.split("/").pop();
+        withVideoReleased(path, wasOpen => {
+            const error = VideoLibrary.deleteVideo(path);
+            if (error) {
+                toast(error, { icon: "delete" });
+                if (wasOpen)
+                    play(path);
+                return;
+            }
+            toast(qsTr("Moved %1 to the Recycle Bin").arg(name), { icon: "delete" });
+        });
+    }
+
     function toggleFullScreen() {
         if (isFullScreen) {
             visibility = visibilityBeforeFullScreen === Window.Maximized ? Window.Maximized : Window.Windowed;
@@ -126,7 +303,7 @@ ApplicationWindow {
     minimumWidth: 720
     minimumHeight: 480
     visible: true
-    title: watch.mode !== "closed" && watch.title ? watch.title + " - Better Video Player" : "Better Video Player"
+    title: watch.mode !== "closed" && watch.title ? watch.title + " - Vessel" : "Vessel"
     color: Theme.background
 
     palette {
@@ -138,10 +315,10 @@ ApplicationWindow {
         buttonText: Theme.textPrimary
         highlight: Theme.accent
         highlightedText: Theme.accentText
-        toolTipBase: "#2A2A2A"
+        toolTipBase: Theme.control
         toolTipText: Theme.textPrimary
-        light: "#3A3A3A"
-        midlight: "#2A2A2A"
+        light: Theme.controlHover
+        midlight: Theme.control
         mid: "#555555"
         dark: "#111111"
         placeholderText: Theme.textTertiary
@@ -153,6 +330,9 @@ ApplicationWindow {
         property real volume: 100
         property int skipSeconds: 10
         property bool autoplay: true
+        property string subtitleSize: "medium"
+        property string subtitleColor: "white"
+        property string subtitleBackground: "outline"
         // A JSON list (QSettings would turn a one-item list into a plain string).
         property string recentSearches: "[]"
     }
@@ -162,7 +342,7 @@ ApplicationWindow {
         title: qsTr("Open a video")
         currentFolder: StandardPaths.writableLocation(StandardPaths.MoviesLocation)
         nameFilters: [
-            qsTr("Videos (*.mp4 *.m4v *.mkv *.mov *.webm *.avi *.wmv *.flv *.ts *.mpg *.mpeg)"),
+            qsTr("Videos (%1)").arg(VideoLibrary.videoNameFilter()),
             qsTr("All files (*)"),
         ]
         onAccepted: window.play(VideoLibrary.localPath(selectedFile))
@@ -178,6 +358,22 @@ ApplicationWindow {
         onActivated: window.openSearch()
     }
 
+    // Back. Esc on the watch page and in full screen is the player's own (see WatchView).
+    Shortcut {
+        sequences: ["Esc"]
+        enabled: watch.mode === "mini" || watch.mode === "closed"
+        onActivated: window.goBack()
+    }
+    Shortcut {
+        sequences: ["Alt+Left"]
+        onActivated: window.goBack()
+    }
+    // The mouse's back button, anywhere a click isn't taken (the player has its own).
+    TapHandler {
+        acceptedButtons: Qt.BackButton
+        onTapped: window.goBack()
+    }
+
     // The library: tabs on the left, pages on the right.
     RowLayout {
         anchors.fill: parent
@@ -187,6 +383,9 @@ ApplicationWindow {
             id: rail
             Layout.fillHeight: true
             onTabClicked: index => {
+                // From the watch page: the video carries on in the mini player.
+                if (watch.mode === "watch")
+                    watch.minimize();
                 if (index === currentIndex) {
                     contentStack.pop(null);
                     return;
@@ -247,19 +446,60 @@ ApplicationWindow {
         id: searchPage
         SearchPage {}
     }
+    Component {
+        id: historyPage
+        HistoryPage {}
+    }
 
+    // Files dropped on the window: a video plays; subtitle files go with the video that's
+    // open (shown on it while they're dragged over).
     DropArea {
+        function subtitleFiles(urls) {
+            return Array.from(urls).map(url => VideoLibrary.localPath(url))
+                        .filter(file => VideoLibrary.isSubtitleFile(file));
+        }
+
         anchors.fill: parent
+        onEntered: drag => watch.subtitleDragging = watch.mode !== "closed" && drag.hasUrls
+                                                    && subtitleFiles(drag.urls).length > 0
+        onExited: watch.subtitleDragging = false
         onDropped: drop => {
-            if (drop.hasUrls)
-                window.play(VideoLibrary.localPath(drop.urls[0]));
+            watch.subtitleDragging = false;
+            if (!drop.hasUrls)
+                return;
+            const subtitles = subtitleFiles(drop.urls);
+            if (subtitles.length > 0) {
+                if (watch.mode === "closed")
+                    window.toast(qsTr("Play a video first, then drop its subtitles on it"), { icon: "subtitles" });
+                else
+                    watch.addSubtitleFiles(subtitles);
+                return;
+            }
+            window.play(VideoLibrary.localPath(drop.urls[0]));
         }
     }
 
-    // The player, over everything else.
+    // The keyboard's media keys (even with another app in front) and Windows' media flyout.
+    MediaControls {
+        appWindow: window
+        active: watch.mode !== "closed"
+        playing: watch.playing
+        title: watch.title
+        subtitle: watch.details.folderLabel ?? ""
+        thumbnail: watch.path !== "" && VideoLibrary.count >= 0 ? VideoLibrary.thumbnailFor(watch.path) : ""
+        canGoNext: watch.nextPath !== ""
+        canGoPrevious: watch.previousPath !== ""
+        onPlayRequested: watch.play()
+        onPauseRequested: watch.pause()
+        onNextRequested: watch.playNext()
+        onPreviousRequested: watch.playPrevious()
+    }
+
+    // The player, over the pages; beside the tabs, which stay in reach (full screen covers them).
     WatchView {
         id: watch
         anchors.fill: parent
+        anchors.leftMargin: mode === "full" ? 0 : rail.width
     }
 
     // A short message at the bottom left, above everything (the player too): what an
@@ -294,7 +534,7 @@ ApplicationWindow {
         height: 52
         radius: Theme.radiusCard
         color: Theme.surfaceHigh
-        border.color: "#26FFFFFF"
+        border.color: Theme.border
         opacity: 0
         visible: opacity > 0
         Behavior on opacity { NumberAnimation { duration: 200 } }
@@ -360,13 +600,18 @@ ApplicationWindow {
                            action: () => window.openDrive(path), duration: 7000 });
         }
 
-        function onDriveRemoved(path, name) {
+        function onDriveRemoved(path, name, ejected) {
             // Back out of the drive's folders, which are now empty.
             while (contentStack.depth > 1 && String(contentStack.currentItem.folder ?? "").startsWith(path))
                 contentStack.pop(StackView.Immediate);
             const phone = VideoLibrary.isPhone(path);
-            window.toast(phone ? qsTr("%1 disconnected").arg(name) : qsTr("%1 removed").arg(name),
-                         { icon: phone ? "smartphone" : "usb" });
+            window.toast(ejected ? qsTr("%1 can be unplugged now").arg(name)
+                         : phone ? qsTr("%1 disconnected").arg(name) : qsTr("%1 removed").arg(name),
+                         { icon: phone ? "smartphone" : ejected ? "eject" : "usb" });
+        }
+
+        function onDriveEjectFailed(path, name, error) {
+            window.toast(qsTr("Couldn't eject %1. %2").arg(name).arg(error), { icon: "eject", duration: 8000 });
         }
 
         function onRescanFinished(count, added, removed) {
@@ -377,86 +622,235 @@ ApplicationWindow {
                                             : qsTr("Library is up to date  •  %1").arg(videos));
         }
 
+        function onPhoneFileShown(path, shown) {
+            if (shown)
+                window.toast(qsTr("Opened in File Explorer"), { icon: "folder_open", duration: 2500 });
+            else
+                window.toast(qsTr("Couldn't find this video in File Explorer. Is the phone still unlocked?"),
+                             { icon: "smartphone" });
+        }
+
         function onLibraryFolderAdded(name, path, count) {
             window.toast(qsTr("%1 added to your library  •  %2").arg(name)
                          .arg(count === 1 ? qsTr("1 video") : qsTr("%1 videos").arg(count)), { icon: "folder" });
         }
     }
 
-    // "Close Better Video Player?" while a video is playing.
-    Popup {
+    // "Close Vessel?" while a video is playing.
+    AppDialog {
         id: closeDialog
+        title: qsTr("Close Vessel?")
+        text: qsTr("A video is still playing. Your place will be saved, so you can pick up where you left off.")
+        cancelText: qsTr("Keep watching")
+        confirmText: qsTr("Close")
+        onConfirmed: {
+            window.closeConfirmed = true;
+            window.close();
+        }
+    }
 
-        anchors.centerIn: Overlay.overlay
-        width: Math.min(420, window.width - 48)
-        modal: true
-        padding: 24
+    component MenuLine: MenuSeparator {
+        contentItem: Rectangle {
+            implicitHeight: 1
+            color: Theme.border
+        }
+    }
 
-        Overlay.modal: Rectangle { color: "#99000000" }
+    // --- A video's right-click menu ---------------------------------------------------
+    AppMenu {
+        id: videoMenu
 
-        background: Rectangle {
-            radius: 24
-            color: "#141414"
-            border.color: "#26FFFFFF"
+        property string path
+        readonly property var details: path !== "" ? VideoLibrary.detailsOf(path) : ({})
+        readonly property bool manageable: details.canManage ?? false
+
+        width: 230
+
+        AppMenuItem {
+            text: qsTr("Play")
+            onTriggered: window.play(videoMenu.path)
+        }
+        AppMenuItem {
+            text: Qt.platform.os === "windows" ? qsTr("Show in File Explorer") : qsTr("Show in folder")
+            onTriggered: {
+                if (videoMenu.details.phone)
+                    window.toast(qsTr("Finding %1 in File Explorer…").arg(videoMenu.details.fileName), { busy: true });
+                VideoLibrary.showInFileManager(videoMenu.path);
+            }
+        }
+        MenuLine {}
+        AppMenuItem {
+            text: videoMenu.details.watched ? qsTr("Mark as unwatched") : qsTr("Mark as watched")
+            onTriggered: window.setWatched(videoMenu.path, !videoMenu.details.watched)
+        }
+        AppMenuItem {
+            // A started video can be taken out of the history (and Continue watching).
+            visible: (videoMenu.details.inHistory ?? false) && !videoMenu.details.watched
+            height: visible ? implicitHeight : 0
+            text: qsTr("Remove from history")
+            onTriggered: window.removeFromHistory(videoMenu.path)
+        }
+        MenuLine {
+            visible: videoMenu.manageable
+            height: visible ? implicitHeight : 0
+        }
+        AppMenuItem {
+            visible: videoMenu.manageable
+            height: visible ? implicitHeight : 0
+            text: qsTr("Rename…")
+            onTriggered: window.renameVideo(videoMenu.path)
+        }
+        AppMenuItem {
+            visible: videoMenu.manageable
+            height: visible ? implicitHeight : 0
+            text: qsTr("Move to…")
+            onTriggered: window.moveVideo(videoMenu.path)
+        }
+        AppMenuItem {
+            visible: videoMenu.manageable
+            height: visible ? implicitHeight : 0
+            text: qsTr("Delete…")
+            onTriggered: window.deleteVideo(videoMenu.path)
+        }
+    }
+
+    // --- A folder's (or drive's, or phone's) right-click menu -------------------------
+    AppMenu {
+        id: folderMenu
+
+        property string folder
+        readonly property bool phone: VideoLibrary.isPhone(folder)
+        readonly property bool hasVideos: folder !== "" && VideoLibrary.count >= 0 && VideoLibrary.videoCountIn(folder) > 0
+        readonly property bool libraryFolder: VideoLibrary.libraryFolders.includes(folder)
+        // A connected drive's own card (not a phone): it can be ejected.
+        readonly property bool drive: Qt.platform.os === "windows" && VideoLibrary.drives.some(d => d.path === folder)
+
+        width: 230
+
+        component FolderMenuItem: AppMenuItem {
+            height: visible ? implicitHeight : 0
         }
 
-        component DialogButton: AbstractButton {
-            id: dialogButton
-            property bool primary: false
-            hoverEnabled: true
-            focusPolicy: Qt.NoFocus
-            leftPadding: 20
-            rightPadding: 20
-            topPadding: 10
-            bottomPadding: 10
-            HoverHandler { cursorShape: Qt.PointingHandCursor }
+        FolderMenuItem {
+            text: qsTr("Open")
+            onTriggered: window.openFolder(folderMenu.folder)
+        }
+        FolderMenuItem {
+            enabled: folderMenu.hasVideos
+            text: qsTr("Play all")
+            onTriggered: window.playFolder(folderMenu.folder, false)
+        }
+        FolderMenuItem {
+            enabled: folderMenu.hasVideos
+            text: qsTr("Shuffle")
+            onTriggered: window.playFolder(folderMenu.folder, true)
+        }
+        FolderMenuItem {
+            visible: !folderMenu.phone
+            text: Qt.platform.os === "windows" ? qsTr("Show in File Explorer") : qsTr("Show in folder")
+            onTriggered: VideoLibrary.showInFileManager(folderMenu.folder)
+        }
+        MenuLine {
+            visible: folderMenu.libraryFolder || folderMenu.drive
+            height: visible ? implicitHeight : 0
+        }
+        FolderMenuItem {
+            visible: folderMenu.libraryFolder
+            text: qsTr("Remove from library")
+            onTriggered: window.removeLibraryFolder(folderMenu.folder)
+        }
+        FolderMenuItem {
+            visible: folderMenu.drive
+            text: qsTr("Eject")
+            onTriggered: window.ejectDrive(folderMenu.folder)
+        }
+    }
+
+    // --- Rename ---------------------------------------------------------------------------
+    AppDialog {
+        id: renameDialog
+
+        property string path
+
+        title: qsTr("Rename")
+        confirmText: qsTr("Rename")
+        preferredWidth: 480
+        onOpened: {
+            nameField.text = path.split("/").pop();
+            // The name without its extension is selected, ready to type over.
+            const dot = nameField.text.lastIndexOf(".");
+            nameField.select(0, dot > 0 ? dot : nameField.text.length);
+            nameField.forceActiveFocus();
+        }
+        onConfirmed: {
+            if (nameField.text.trim() !== "" && nameField.text !== path.split("/").pop())
+                window.finishRename(path, nameField.text);
+        }
+
+        TextField {
+            id: nameField
+            Layout.fillWidth: true
+            color: Theme.textPrimary
+            selectionColor: Theme.accent
+            selectedTextColor: Theme.accentText
+            font.pixelSize: 15
+            padding: 12
             background: Rectangle {
-                radius: height / 2
-                color: dialogButton.primary ? (dialogButton.hovered ? Qt.lighter(Theme.accent, 1.1) : Theme.accent)
-                                            : (dialogButton.hovered ? "#3A3A3A" : "#2A2A2A")
+                radius: 12
+                color: Theme.surfaceHigh
+                border.color: nameField.activeFocus ? Theme.accent : Theme.border
             }
-            contentItem: Text {
-                text: dialogButton.text
-                color: dialogButton.primary ? Theme.accentText : Theme.textPrimary
-                font.pixelSize: 14
-                font.weight: Font.Bold
-            }
+            onAccepted: renameDialog.confirm()
         }
+        Text {
+            Layout.fillWidth: true
+            text: qsTr("Subtitle files named after it are renamed too, and it keeps its place in your history.")
+            color: Theme.textSecondary
+            font.pixelSize: 13
+            wrapMode: Text.Wrap
+        }
+    }
 
-        contentItem: ColumnLayout {
-            spacing: 10
+    // --- Delete ---------------------------------------------------------------------------
+    AppDialog {
+        id: deleteDialog
 
-            Text {
-                text: qsTr("Close Better Video Player?")
-                color: Theme.textPrimary
-                font.pixelSize: 20
-                font.weight: Font.Bold
-            }
-            Text {
-                Layout.fillWidth: true
-                text: qsTr("A video is still playing. Your place will be saved, so you can pick up where you left off.")
-                color: Theme.textSecondary
-                font.pixelSize: 14
-                wrapMode: Text.Wrap
-            }
+        property string path
 
-            RowLayout {
-                Layout.alignment: Qt.AlignRight
-                Layout.topMargin: 12
-                spacing: 8
+        title: qsTr("Delete this video?")
+        text: qsTr("%1 will be moved to the Recycle Bin, so you can still restore it from there.")
+              .arg(path.split("/").pop())
+        confirmText: qsTr("Delete")
+        onConfirmed: window.finishDelete(path)
+    }
 
-                DialogButton {
-                    text: qsTr("Keep watching")
-                    onClicked: closeDialog.close()
-                }
-                DialogButton {
-                    primary: true
-                    text: qsTr("Close")
-                    onClicked: {
-                        window.closeConfirmed = true;
-                        window.close();
-                    }
-                }
+    // --- Move ---------------------------------------------------------------------------
+    FolderDialog {
+        id: moveDialog
+        property string path
+        title: qsTr("Move to…")
+        onAccepted: {
+            const path = moveDialog.path;
+            const folder = VideoLibrary.localPath(selectedFolder);
+            window.withVideoReleased(path, wasOpen => {
+                window.reopenAfterMove = wasOpen ? path : "";
+                window.toast(qsTr("Moving %1…").arg(path.split("/").pop()), { busy: true });
+                VideoLibrary.moveVideo(path, folder);
+            });
+        }
+    }
+
+    Connections {
+        target: VideoLibrary
+        function onVideoMoved(oldPath, newPath, error) {
+            if (error)
+                window.toast(error, { icon: "move" });
+            else
+                window.toast(qsTr("Moved to %1").arg(VideoLibrary.folderName(newPath.substring(0, newPath.lastIndexOf("/")))),
+                             { icon: "move" });
+            if (window.reopenAfterMove === oldPath) {
+                window.reopenAfterMove = "";
+                window.play(error ? oldPath : newPath);
             }
         }
     }

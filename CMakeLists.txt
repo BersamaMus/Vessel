@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(BetterVideoPlayer VERSION 0.1.0 LANGUAGES CXX)
+project(Vessel VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Concurrent OpenGL Quick)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Concurrent Network OpenGL Quick)
 qt_standard_project_setup(REQUIRES 6.8)
 
 # ---------------------------------------------------------------------------
@@ -54,7 +54,7 @@ endif()
 # ---------------------------------------------------------------------------
 # Application
 # ---------------------------------------------------------------------------
-qt_add_executable(BetterVideoPlayer src/main.cpp)
+qt_add_executable(VesselPlayer src/main.cpp)
 
 set(QML_FILES
     qml/Main.qml
@@ -64,21 +64,30 @@ set(QML_FILES
     qml/IconButton.qml
     qml/TextAction.qml
     qml/AppLogo.qml
+    qml/LogoMark.qml
     qml/AppMenu.qml
     qml/AppMenuItem.qml
     qml/AppSlider.qml
     qml/AppSwitch.qml
     qml/RoundedImage.qml
+    qml/SelectableText.qml
     qml/EmptyNote.qml
     qml/VideoCard.qml
     qml/FolderCard.qml
     qml/PickRow.qml
     qml/Shelf.qml
+    qml/SmoothWheel.qml
+    qml/PageScroll.qml
+    qml/PageTitle.qml
+    qml/AppActions.qml
+    qml/DialogButton.qml
+    qml/AppDialog.qml
     qml/ShelfHeader.qml
     qml/NavRail.qml
     qml/HomePage.qml
     qml/FolderPage.qml
     qml/SearchPage.qml
+    qml/HistoryPage.qml
     qml/DropButton.qml
     qml/FilterBar.qml
     qml/WorkProgress.qml
@@ -95,8 +104,8 @@ foreach(file IN LISTS QML_FILES)
     set_source_files_properties("${file}" PROPERTIES QT_RESOURCE_ALIAS "${name}")
 endforeach()
 
-qt_add_qml_module(BetterVideoPlayer
-    URI BetterVideoPlayer
+qt_add_qml_module(VesselPlayer
+    URI Vessel
     QML_FILES ${QML_FILES}
     SOURCES
         src/MpvItem.cpp src/MpvItem.h
@@ -104,28 +113,46 @@ qt_add_qml_module(BetterVideoPlayer
         src/VideoLibrary.cpp src/VideoLibrary.h
         src/VideoModels.cpp src/VideoModels.h
         src/DriveWatcher.cpp src/DriveWatcher.h
+        src/DriveEject.cpp src/DriveEject.h
         src/PhoneDevices.cpp src/PhoneDevices.h
+        src/MediaControls.cpp src/MediaControls.h
+        src/VideoFormats.cpp src/VideoFormats.h
+        src/SeekPreview.cpp src/SeekPreview.h
+        src/FolderWatcher.cpp src/FolderWatcher.h
+        src/SystemIntegration.cpp src/SystemIntegration.h
 )
 
-target_include_directories(BetterVideoPlayer PRIVATE src)
+target_include_directories(VesselPlayer PRIVATE src)
 if(WIN32)
-    target_compile_definitions(BetterVideoPlayer PRIVATE NOMINMAX)
-    # Phones over USB (MTP): Windows Portable Devices.
-    target_link_libraries(BetterVideoPlayer PRIVATE PortableDeviceGUIDs ole32 oleaut32)
+    target_compile_definitions(VesselPlayer PRIVATE NOMINMAX)
+    # Phones over USB (MTP): Windows Portable Devices, and the shell to show their files in Explorer.
+    target_link_libraries(VesselPlayer PRIVATE PortableDeviceGUIDs ole32 oleaut32 shell32 shlwapi)
+    # Media keys and Windows' media flyout (MediaControls), through C++/WinRT.
+    target_link_libraries(VesselPlayer PRIVATE windowsapp)
+    # Ejecting drives (DriveEject): the device tree and its setup API.
+    target_link_libraries(VesselPlayer PRIVATE setupapi cfgmgr32)
+    # The name Windows shows for the exe (its description, in Task Manager and the media flyout).
+    set(APP_DISPLAY_NAME "Vessel")
+    # Its icon (made from qml/LogoMark.qml by icon/make-icon.ps1): Qt uses it for the windows too.
+    set(APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/icon/vessel.ico")
+    configure_file(src/app.rc.in "${CMAKE_CURRENT_BINARY_DIR}/app.rc" @ONLY)
+    target_sources(VesselPlayer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/app.rc")
 endif()
-target_link_libraries(BetterVideoPlayer PRIVATE Qt6::Concurrent Qt6::OpenGL Qt6::Quick mpv::mpv)
-target_compile_definitions(BetterVideoPlayer PRIVATE PROJECT_VERSION="${PROJECT_VERSION}")
+target_link_libraries(VesselPlayer PRIVATE Qt6::Concurrent Qt6::Network Qt6::OpenGL Qt6::Quick mpv::mpv)
+target_compile_definitions(VesselPlayer PRIVATE PROJECT_VERSION="${PROJECT_VERSION}")
+# The window icon elsewhere (Windows takes it from the exe).
+qt_add_resources(VesselPlayer "app_icon" PREFIX "/" FILES icon/vessel.png)
 
-set_target_properties(BetterVideoPlayer PROPERTIES
+set_target_properties(VesselPlayer PROPERTIES
     WIN32_EXECUTABLE ON
     MACOSX_BUNDLE ON)
 
 if(WIN32)
     # Make the build directory runnable: copy libmpv and deploy Qt next to the exe.
     find_program(WINDEPLOYQT_EXE windeployqt HINTS "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_BINS}")
-    add_custom_command(TARGET BetterVideoPlayer POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MPV_DLL}" "$<TARGET_FILE_DIR:BetterVideoPlayer>"
+    add_custom_command(TARGET VesselPlayer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MPV_DLL}" "$<TARGET_FILE_DIR:VesselPlayer>"
         COMMAND "${WINDEPLOYQT_EXE}" --no-translations --no-opengl-sw --no-compiler-runtime
-                --qmldir "${CMAKE_CURRENT_SOURCE_DIR}/qml" --verbose 0 "$<TARGET_FILE:BetterVideoPlayer>"
+                --qmldir "${CMAKE_CURRENT_SOURCE_DIR}/qml" --verbose 0 "$<TARGET_FILE:VesselPlayer>"
         VERBATIM)
 endif()

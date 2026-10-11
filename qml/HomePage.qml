@@ -12,48 +12,22 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-        scrolled: page.contentItem.contentY > 1
+        scrolled: page.contentY > 1
 
         RowLayout {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.pagePadding
-            Layout.rightMargin: 8
+            Layout.rightMargin: Theme.pagePadding - 8
             Layout.topMargin: 14
             spacing: 4
 
             AppLogo {}
             Item { Layout.fillWidth: true }
-            IconButton {
-                iconName: "search"
-                tip: qsTr("Search (Ctrl+F)")
-                onClicked: page.app.openSearch()
-            }
-            IconButton {
-                iconName: "folder_open"
-                tip: qsTr("Open a file (Ctrl+O)")
-                onClicked: page.app.openFileDialog()
-            }
-            IconButton {
-                iconName: "more"
-                tip: qsTr("More")
-                onClicked: menu.popup()
-
-                AppMenu {
-                    id: menu
-                    AppMenuItem {
-                        text: qsTr("Rescan library")
-                        onTriggered: page.app.rescanLibrary()
-                    }
-                    AppMenuItem {
-                        text: qsTr("Open a file…")
-                        onTriggered: page.app.openFileDialog()
-                    }
-                }
-            }
+            AppActions {}
         }
     }
 
-    ScrollView {
+    PageScroll {
         id: page
 
         readonly property var app: ApplicationWindow.window
@@ -65,8 +39,6 @@ Item {
         anchors.right: parent.right
         anchors.top: bar.bottom
         anchors.bottom: parent.bottom
-        contentWidth: availableWidth
-        clip: true
 
         ColumnLayout {
             width: page.availableWidth
@@ -79,6 +51,8 @@ Item {
                 text: VideoLibrary.scanning
                       ? qsTr("Looking for videos in your library folders…")
                       : qsTr("No videos found in your library folders. Choose which folders to use in Settings.")
+                actionText: VideoLibrary.scanning ? "" : qsTr("Open Settings")
+                onActionTriggered: page.app.showTab(4)
             }
 
             // --- Continue watching -------------------------------------------
@@ -102,12 +76,14 @@ Item {
                 delegate: VideoCard {
                     required property var model
                     width: page.cardWidth
+                    path: model.path
                     title: model.title
                     subtitle: model.remainingText
                     thumbnail: model.thumbnail
                     loading: model.thumbnailPending
                     durationText: model.durationText
                     progress: model.progress
+                    watched: model.finished
                     onClicked: page.app.play(model.path)
                 }
             }
@@ -146,11 +122,13 @@ Item {
                     required property var model
                     width: picks.cellWidth - 8
                     height: picks.cellHeight - 2
+                    path: model.path
                     title: model.title
                     subtitle: model.durationText !== "" ? model.subtitle + "  •  " + model.durationText : model.subtitle
                     thumbnail: model.thumbnail
                     loading: model.thumbnailPending
                     progress: model.progress
+                    watched: model.finished
                     onClicked: page.app.play(model.path)
                 }
             }
@@ -171,12 +149,14 @@ Item {
                 delegate: VideoCard {
                     required property var model
                     width: page.cardWidth
+                    path: model.path
                     title: model.title
                     subtitle: model.subtitle
                     thumbnail: model.thumbnail
                     loading: model.thumbnailPending
                     durationText: model.durationText
                     progress: model.progress
+                    watched: model.finished
                     onClicked: page.app.play(model.path)
                 }
             }
@@ -201,6 +181,7 @@ Item {
                     width: page.cardWidth
                     name: model.name
                     countText: model.countText
+                    folder: model.folder
                     thumbnail: model.thumbnail
                     loading: model.thumbnailPending
                     onClicked: page.app.openFolder(model.folder)

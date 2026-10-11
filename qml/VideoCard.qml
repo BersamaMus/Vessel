@@ -6,11 +6,15 @@ import QtQuick.Controls.Basic
 AbstractButton {
     id: card
 
+    // The video's path: right-clicking opens its menu (see Main.showVideoMenu).
+    property string path
     property string title
     property string subtitle
     property url thumbnail
     property string durationText
     property real progress: 0
+    // Finished: marked with a tick.
+    property bool watched: false
     // The thumbnail is still being made.
     property bool loading: false
 
@@ -21,6 +25,11 @@ AbstractButton {
     implicitHeight: contentItem.implicitHeight
 
     HoverHandler { cursorShape: Qt.PointingHandCursor }
+    TapHandler {
+        acceptedButtons: Qt.RightButton
+        enabled: card.path !== ""
+        onTapped: card.ApplicationWindow.window.showVideoMenu(card.path)
+    }
 
     background: null
 
@@ -64,6 +73,36 @@ AbstractButton {
                 }
             }
 
+            // Watched (finished, or marked so).
+            Rectangle {
+                visible: card.watched
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.margins: 8
+                width: watchedRow.implicitWidth + 14
+                height: 24
+                radius: 12
+                color: Theme.badge
+                Row {
+                    id: watchedRow
+                    anchors.centerIn: parent
+                    spacing: 4
+                    Icon {
+                        anchors.verticalCenter: parent.verticalCenter
+                        name: "check"
+                        size: 16
+                        color: Theme.accent
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: qsTr("Watched")
+                        color: Theme.textPrimary
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                    }
+                }
+            }
+
             Rectangle {
                 visible: card.durationText !== ""
                 anchors.right: parent.right
@@ -73,7 +112,7 @@ AbstractButton {
                 width: durationLabel.implicitWidth + 12
                 height: 22
                 radius: 6
-                color: "#CC000000"
+                color: Theme.badge
                 Text {
                     id: durationLabel
                     anchors.centerIn: parent
@@ -92,7 +131,7 @@ AbstractButton {
                 anchors.margins: 10
                 height: 4
                 radius: 2
-                color: "#59FFFFFF"
+                color: Theme.track
                 Rectangle {
                     width: parent.width * card.progress
                     height: parent.height

@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls.Basic
 
-// An on/off switch: yellow when on. Optionally shows an icon in the knob.
+// An on/off switch: purple when on. Optionally shows an icon in the knob.
 // It shows `checked` but doesn't flip it: handle clicked() and bind `checked`.
 AbstractButton {
     id: control
@@ -22,7 +22,7 @@ AbstractButton {
 
     background: Rectangle {
         radius: height / 2
-        color: control.checked ? Theme.accent : (control.hovered ? "#4A4A4A" : "#3A3A3A")
+        color: control.checked ? Theme.accent : (control.hovered ? "#4A4A4A" : Theme.controlHover)
         Behavior on color { ColorAnimation { duration: 150 } }
     }
 
@@ -42,7 +42,7 @@ AbstractButton {
                 anchors.centerIn: parent
                 name: control.knobIcon
                 size: parent.width - 4
-                color: control.checked ? Theme.accent : "#3A3A3A"
+                color: control.checked ? Theme.accent : Theme.controlHover
             }
         }
     }

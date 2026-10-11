@@ -24,40 +24,74 @@ Item {
     property real miniProgress: 0
     // 0 = watch page, 1 = full screen.
     property real fullProgress: 0
+    // The mini player swiped sideways, in pixels: it follows the finger, fading, and is
+    // closed once it's thrown far enough.
+    property real dismissX: 0
     property bool controlsShown: true
     property double lastPosition: 0
+    // Percent; past 100 the sound is amplified (see MpvItem's volume).
+    readonly property int maxVolume: 200
     property double lastDuration: 0
 
     readonly property var app: ApplicationWindow.window
     readonly property var details: path !== "" && VideoLibrary.count >= 0 ? VideoLibrary.detailsOf(path) : ({})
     readonly property string title: details.title ?? ""
     readonly property bool playing: mode !== "closed" && mpv.loaded && !mpv.paused && !mpv.ended
-    readonly property string nextPath: path !== "" && VideoLibrary.count >= 0 ? VideoLibrary.nextInFolder(path) : ""
-    readonly property string previousPath: path !== "" && VideoLibrary.count >= 0 ? VideoLibrary.previousInFolder(path) : ""
-    // The double-tap skip in progress: which side, and how far so far.
+    readonly property string playPauseTip: mpv.ended ? qsTr("Play again (Space)") : mpv.paused ? qsTr("Play (Space)") : qsTr("Pause (Space)")
+    // Play all or Shuffle: the videos to play in turn (empty when playing one video, whose
+    // folder is the list), what they are ("Season 2"), and whether they were shuffled.
+    property var playlist: []
+    property string playlistName
+    property bool shuffled: false
+    readonly property int playlistIndex: playlist.indexOf(path)
+    readonly property bool inPlaylist: playlistIndex >= 0
+    readonly property string nextPath: inPlaylist ? (playlist[playlistIndex + 1] ?? "")
+                                     : path !== "" && VideoLibrary.count >= 0 ? VideoLibrary.nextInFolder(path) : ""
+    readonly property string previousPath: inPlaylist ? (playlistIndex > 0 ? playlist[playlistIndex - 1] : "")
+                                         : path !== "" && VideoLibrary.count >= 0 ? VideoLibrary.previousInFolder(path) : ""
+    // The skip in progress: which side, and how far so far.
     property int seekSide: 0
     property int seekTotal: 0
-    // Subtitle files found for this video, and the one being offered ("" for no prompt).
     // Seconds until the next video autoplays; 0 when no countdown is running.
     property int autoplayCountdown: 0
+    // Subtitle files found for this video, and the one being offered ("" for no prompt).
     property var subtitleCandidates: []
+    // Subtitle files are being dragged over the window (see Main's DropArea).
+    property bool subtitleDragging: false
     property string subtitleOffer: ""
     // Controls showing on the video: subtitles move up out of their way.
     readonly property bool controlsOnVideo: mode !== "closed" && controlsShown && miniProgress < 0.2
     readonly property int subtitlePosition: controlsOnVideo ? Math.round(100 - 9000 / Math.max(frame.height, 300)) : 100
 
     onSubtitlePositionChanged: mpv.setMpvProperty("sub-pos", subtitlePosition)
-    // Rebuilt when the library finishes scanning (a file can be opened before that).
-    readonly property var queue: path !== "" && VideoLibrary.count >= 0 ? VideoLibrary.videosIn(VideoLibrary.folderOf(path)) : null
+
+    // A phone's video is open: its thumbnails wait, so the phone answers the player first.
+    Binding {
+        target: VideoLibrary
+        property: "phonePlaying"
+        value: watch.mode !== "closed" && (watch.details.phone ?? false)
+    }
+    // The list beside the video: the playlist, or else the video's folder. Rebuilt when the
+    // library finishes scanning (a file can be opened before that).
+    readonly property var playlistModel: playlist.length > 0 && VideoLibrary.count >= 0 ? VideoLibrary.videosAt(playlist) : null
+    readonly property var queue: inPlaylist ? playlistModel
+                               : path !== "" && VideoLibrary.count >= 0 ? VideoLibrary.videosIn(VideoLibrary.folderOf(path)) : null
     readonly property var suggestions: path !== "" && VideoLibrary.count >= 0 ? VideoLibrary.suggestionsFor(path) : null
 
     // --- Layout ------------------------------------------------------------
     readonly property bool wide: width >= 1000
     readonly property real pad: 24
-    readonly property real sideWidth: wide ? Math.min(420, Math.max(340, width * 0.3)) : 0
-    readonly property real watchWidth: Math.min(width - 2 * pad - (wide ? sideWidth + pad : 0),
-                                                height * (wide ? 0.66 : 0.5) * 16 / 9)
-    readonly property rect watchRect: Qt.rect(pad, 16, watchWidth, watchWidth * 9 / 16)
+    // The video is as wide as the window allows, but no taller than about two thirds of
+    // it (so the details show below). In a wide, short window (maximized on a 16:9 screen)
+    // that leaves room over: the side panel takes some, and the rest is shared out on both
+    // sides so the page stays centred instead of leaving a gap on the right.
+    readonly property real baseSideWidth: wide ? Math.min(420, Math.max(340, width * 0.3)) : 0
+    readonly property real watchWidth: Math.min(width - 2 * pad - (wide ? baseSideWidth + pad : 0),
+                                                height * (wide ? 0.68 : 0.5) * 16 / 9)
+    readonly property real spareWidth: Math.max(0, width - 2 * pad - watchWidth - (wide ? baseSideWidth + pad : 0))
+    readonly property real sideWidth: wide ? baseSideWidth + Math.min(spareWidth, 500 - baseSideWidth) : 0
+    readonly property real columnX: pad + (spareWidth - (sideWidth - baseSideWidth)) / 2
+    readonly property rect watchRect: Qt.rect(columnX, 16, watchWidth, watchWidth * 9 / 16)
     readonly property real miniWidth: Math.max(300, Math.min(400, width * 0.28))
     readonly property rect miniRect: Qt.rect(width - miniWidth - 20, height - miniWidth * 9 / 16 - 20,
                                              miniWidth, miniWidth * 9 / 16)
@@ -69,6 +103,14 @@ Item {
     onQueueChanged: Qt.callLater(scrollQueueToCurrent)
 
     // --- Actions -----------------------------------------------------------
+    // Play all and Shuffle (see Main.playAll): from the first video in the list.
+    function openList(paths, name, shuffle) {
+        playlist = paths;
+        playlistName = name;
+        shuffled = shuffle;
+        open(paths[0]);
+    }
+
     function open(newPath) {
         if (!newPath)
             return;
@@ -77,10 +119,17 @@ Item {
                 expand();
             return;
         }
+        dismissAnim.stop();
+        dismissX = 0;
+        // A video from outside the playlist (a suggestion) leaves it.
+        if (playlist.length > 0 && !playlist.includes(newPath))
+            playlist = [];
         saveProgress();
         lastPosition = 0;
         lastDuration = 0;
         cancelAutoplay();
+        resetPicture();
+        SeekPreview.close();   // the last video's file, if it had one open
         errorText.text = "";
         path = newPath;
         mpv.volume = app.volume;
@@ -92,7 +141,8 @@ Item {
         subtitleCandidates = found;
         subtitleOffer = choice === undefined && found.length > 0 ? found[0] : "";
         const subtitles = choice ? [choice].concat(found.filter(file => file !== choice)) : [];
-        mpv.open(VideoLibrary.playbackUrl(newPath), VideoLibrary.resumePosition(newPath), subtitles);
+        mpv.open(VideoLibrary.playbackUrl(newPath), VideoLibrary.resumePosition(newPath), subtitles,
+                 VideoLibrary.audioChoice(newPath));
         if (mode === "closed") {
             miniProgress = 0;
             fullProgress = 0;
@@ -101,6 +151,17 @@ Item {
             expand();
         wake();
         Qt.callLater(scrollQueueToCurrent);
+    }
+
+    // From the media keys and Windows' media flyout (see MediaControls in Main).
+    function play() {
+        if (mode !== "closed" && !playing)
+            mpv.togglePause();   // from the end, starts over
+    }
+
+    function pause() {
+        if (playing)
+            mpv.togglePause();
     }
 
     function playNext() {
@@ -132,6 +193,18 @@ Item {
         VideoLibrary.setSubtitleChoice(path, subtitleCandidates[0]);
         subtitleOffer = "";
         flash("subtitles", qsTr("Subtitles: %1").arg(subtitleCandidates[0].split("/").pop()));
+    }
+
+    // Subtitle files the user picked or dropped on the player: the first is shown, the
+    // others listed in the subtitles menu. Remembered for this video.
+    function addSubtitleFiles(files) {
+        if (files.length === 0)
+            return;
+        files.forEach((file, i) => mpv.addSubtitleFile(file, i === 0));
+        VideoLibrary.setSubtitleChoice(path, files[0]);
+        subtitleOffer = "";
+        flash("subtitles", qsTr("Subtitles: %1").arg(files[0].split("/").pop()));
+        wake();
     }
 
     function declineSubtitles() {
@@ -167,12 +240,95 @@ Item {
             VideoLibrary.setSubtitleChoice(path, track.file);
     }
 
-    // -1 for the left third of the video, 1 for the right third, 0 for the middle.
-    function sideAt(x) {
-        return x < frame.width / 3 ? -1 : x > frame.width * 2 / 3 ? 1 : 0;
+    // --- Subtitle look (Settings > Subtitles) ---------------------------------
+    function applySubtitleStyle() {
+        mpv.setMpvProperty("sub-scale", ({ small: 0.8, medium: 1, large: 1.25, xlarge: 1.5 })[app.subtitleSize] ?? 1);
+        mpv.setMpvProperty("sub-color", app.subtitleColor === "yellow" ? "#FFFFE14D" : "#FFFFFFFF");
+        const box = app.subtitleBackground === "box";
+        mpv.setMpvProperty("sub-border-style", box ? "background-box" : "outline-and-shadow");
+        mpv.setMpvProperty("sub-back-color", "#C0000000");
+        // "None" keeps a soft shadow, so white text stays readable on a bright picture.
+        mpv.setMpvProperty("sub-outline-size", app.subtitleBackground === "none" ? 0 : 1.65);
+        mpv.setMpvProperty("sub-shadow-offset", app.subtitleBackground === "none" ? 1.5 : 0);
     }
 
-    // Skips back (-1) or forward (1), adding up on the side bubble: double-taps and keys.
+    Connections {
+        target: watch.app
+        function onSubtitleSizeChanged() { watch.applySubtitleStyle() }
+        function onSubtitleColorChanged() { watch.applySubtitleStyle() }
+        function onSubtitleBackgroundChanged() { watch.applySubtitleStyle() }
+    }
+    Component.onCompleted: applySubtitleStyle()
+
+    // --- Repeat and picture (the More menu); each video starts without them ----
+    property bool looping: false
+    property string aspect: ""        // "" for the video's own, else "16:9", "4:3", "21:9"
+    property bool fillScreen: false   // crops the edges so there are no black bars
+    property int pictureRotation: 0   // degrees, clockwise
+
+    onLoopingChanged: mpv.setMpvProperty("loop-file", looping ? "inf" : "no")
+    onAspectChanged: mpv.setMpvProperty("video-aspect-override", aspect === "" ? "-1" : aspect)
+    onFillScreenChanged: mpv.setMpvProperty("panscan", fillScreen ? 1 : 0)
+    onPictureRotationChanged: mpv.setMpvProperty("video-rotate", pictureRotation)
+
+    function resetPicture() {
+        looping = false;
+        aspect = "";
+        fillScreen = false;
+        pictureRotation = 0;
+    }
+
+    function setAspect(value) {
+        aspect = value;
+        flash("aspect", value === "" ? qsTr("Original aspect ratio") : qsTr("Aspect ratio %1").arg(value));
+    }
+
+    function rotate() {
+        pictureRotation = (pictureRotation + 90) % 360;
+        flash("rotate", pictureRotation === 0 ? qsTr("Not rotated") : qsTr("Rotated %1°").arg(pictureRotation));
+    }
+
+    // Playback speeds offered, as on YouTube. The speed carries on to the next video, until
+    // the app is closed.
+    readonly property var speeds: [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
+
+    function speedText(speed) {
+        return qsTr("%1×").arg(speed);
+    }
+
+    function setSpeed(speed) {
+        mpv.speed = speed;
+        flash("speed", speed === 1 ? qsTr("Normal speed") : qsTr("Speed %1").arg(speedText(speed)));
+        wake();
+    }
+
+    // > and <: the next speed up or down the list.
+    function stepSpeed(direction) {
+        const current = speeds.findIndex(speed => speed >= mpv.speed - 0.001);
+        const index = Math.max(0, Math.min(speeds.length - 1, (current < 0 ? speeds.length - 1 : current) + direction));
+        setSpeed(speeds[index]);
+    }
+
+    // From the audio menu. Remembered for next time.
+    function chooseAudio(track) {
+        mpv.setAudioTrack(track.id);
+        VideoLibrary.setAudioChoice(path, track.id);
+        flash("audiotrack", qsTr("Audio: %1").arg(track.label));
+        wake();
+    }
+
+    // A: the next audio track, round to the first.
+    function cycleAudio() {
+        const tracks = mpv.audioTracks;
+        if (tracks.length < 2) {
+            flash("audiotrack", tracks.length === 0 ? qsTr("No audio") : qsTr("Only one audio track"));
+            return;
+        }
+        const current = tracks.findIndex(track => track.selected);
+        chooseAudio(tracks[(current + 1) % tracks.length]);
+    }
+
+    // Skips back (-1) or forward (1) from the keyboard, adding up on the side bubble.
     function tapSeek(side, seconds) {
         const amount = seconds ?? app.skipSeconds;
         if (side !== seekSide)
@@ -196,10 +352,13 @@ Item {
         wake();
     }
 
+    // Full screen switches at once, in step with the window: animating the video's size
+    // while the window itself is resizing only made both stutter.
     function enterFull() {
         mode = "full";
+        miniAnim.stop();
         miniProgress = 0;
-        animate(fullAnim, 1);
+        fullProgress = 1;
         if (!app.isFullScreen)
             app.toggleFullScreen();
         wake();
@@ -207,7 +366,7 @@ Item {
 
     function exitFull() {
         mode = "watch";
-        animate(fullAnim, 0);
+        fullProgress = 0;
         if (app.isFullScreen)
             app.toggleFullScreen();
         wake();
@@ -223,6 +382,7 @@ Item {
         if (app.isFullScreen)
             app.toggleFullScreen();
         mpv.stop();
+        SeekPreview.close();   // lets go of the file too
         mode = "closed";
     }
 
@@ -250,7 +410,7 @@ Item {
 
     // Up / Down keys.
     function stepVolume(delta) {
-        const value = Math.max(0, Math.min(100, Math.round(mpv.volume) + delta));
+        const value = Math.max(0, Math.min(maxVolume, Math.round(mpv.volume) + delta));
         setVolume(value);
         flash(value === 0 ? "volume_off" : "volume", value + "%");
     }
@@ -291,10 +451,17 @@ Item {
 
     // Called when a swipe on the video ends.
     function finishSwipe(axis, delta, velocity, startMini) {
-        if (axis === "h") {
-            if (Math.abs(delta.x) < 60)
-                return;
-            mode === "mini" ? close() : toggleFull();
+        if (axis === "h" && mode === "mini") {
+            // Thrown far or fast enough: off it goes, the way it was swiped.
+            const away = Math.abs(delta.x) > miniWidth * 0.35 || Math.abs(velocity.x) > 900;
+            const side = (Math.abs(velocity.x) > 900 ? velocity.x : delta.x) < 0 ? -1 : 1;
+            dismissAnim.stop();
+            dismissAnim.closing = away;
+            dismissAnim.to = away ? side * (miniWidth + 40) : 0;
+            dismissAnim.start();
+        } else if (axis === "h") {
+            if (Math.abs(delta.x) >= 60)
+                toggleFull();
         } else if (axis === "v") {
             if (mode === "full") {
                 if (delta.y > 60)
@@ -321,7 +488,19 @@ Item {
     Behavior on opacity { NumberAnimation { duration: 200 } }
 
     NumberAnimation { id: miniAnim; target: watch; property: "miniProgress"; duration: 320; easing.type: Easing.OutCubic }
-    NumberAnimation { id: fullAnim; target: watch; property: "fullProgress"; duration: 250; easing.type: Easing.OutCubic }
+    NumberAnimation {
+        id: dismissAnim
+        // Thrown off: closes when it's gone. Otherwise it springs back.
+        property bool closing: false
+        target: watch
+        property: "dismissX"
+        duration: 220
+        easing.type: Easing.OutCubic
+        onFinished: {
+            if (closing)
+                watch.close();
+        }
+    }
 
     Timer {
         id: autoplayTimer
@@ -345,7 +524,7 @@ Item {
         id: hideTimer
         interval: 2500
         onTriggered: {
-            if (!mpv.paused && !seekBar.pressed && !controlsHover.hovered && !subtitleMenu.opened)
+            if (!mpv.paused && !seekBar.pressed && !controlsHover.hovered && !subtitleMenu.opened && !audioMenu.opened && !speedMenu.opened && !moreMenu.opened)
                 watch.controlsShown = false;
         }
     }
@@ -355,13 +534,12 @@ Item {
         id: leaveTimer
         interval: 300
         onTriggered: {
-            if (!mpv.paused && !seekBar.pressed && !subtitleMenu.opened)
+            if (!mpv.paused && !seekBar.pressed && !subtitleMenu.opened && !audioMenu.opened && !speedMenu.opened && !moreMenu.opened)
                 watch.controlsShown = false;
         }
     }
 
-    // Double-tap seeking, as on YouTube: double-tap a side to skip (10 seconds by default),
-    // and keep tapping there to skip more.
+    // Skips in quick succession (J / L, arrow keys) add up on one bubble.
     Timer {
         id: seekBurst
         interval: 700
@@ -386,7 +564,7 @@ Item {
         function onVisibilityChanged() {
             if (!watch.app.isFullScreen && watch.mode === "full") {
                 watch.mode = "watch";
-                watch.animate(fullAnim, 0);
+                watch.fullProgress = 0;
             }
         }
     }
@@ -415,13 +593,18 @@ Item {
         visible: opacity > 0
     }
 
-    // Keeps clicks and scrolling from reaching the library underneath.
+    // Keeps clicks and scrolling from reaching the library underneath. The mouse's back
+    // button goes back, as Esc does.
     MouseArea {
         anchors.fill: parent
         visible: watch.miniProgress < 0.5
         hoverEnabled: true
         acceptedButtons: Qt.AllButtons
         onWheel: wheel => wheel.accepted = true
+        onClicked: mouse => {
+            if (mouse.button === Qt.BackButton)
+                watch.app.goBack();
+        }
     }
 
     Item {
@@ -438,19 +621,17 @@ Item {
             width: watch.watchRect.width
             spacing: 6
 
-            Text {
+            // The details can be selected and copied (see SelectableText).
+            SelectableText {
                 Layout.fillWidth: true
                 text: watch.title
                 color: Theme.textPrimary
                 font.pixelSize: 22
                 font.weight: Font.Bold
                 font.letterSpacing: -0.3
-                wrapMode: Text.Wrap
-                maximumLineCount: 2
-                elide: Text.ElideRight
             }
 
-            Text {
+            SelectableText {
                 Layout.fillWidth: true
                 // Created: when it was recorded or made (its media-created tag, or else the
                 // modified date, which copying keeps). Added: when the file arrived here.
@@ -463,7 +644,6 @@ Item {
                 }
                 color: Theme.textSecondary
                 font.pixelSize: 14
-                elide: Text.ElideRight
             }
 
             Rectangle {
@@ -481,16 +661,15 @@ Item {
                     anchors.margins: 12
                     spacing: 4
 
-                    Text {
+                    SelectableText {
                         width: parent.width
                         text: watch.details.fileName ?? ""
                         color: Theme.textPrimary
                         font.pixelSize: 14
                         font.weight: Font.DemiBold
-                        elide: Text.ElideMiddle
                     }
                     // "MP4  •  H.264 (AVC)  •  1920 × 1080  •  23.98 fps  •  1.4 GB"
-                    Text {
+                    SelectableText {
                         width: parent.width
                         text: {
                             const name = watch.details.fileName ?? "";
@@ -504,18 +683,22 @@ Item {
                         }
                         color: Theme.textSecondary
                         font.pixelSize: 13
-                        elide: Text.ElideRight
                     }
 
-                    // Opens the folder with this file selected.
+                    // Opens the folder with this file selected (a phone's too, under This PC).
                     AbstractButton {
                         id: locationLink
                         width: parent.width
                         topPadding: 4
                         hoverEnabled: true
                         focusPolicy: Qt.NoFocus
-                        visible: watch.path !== "" && !watch.details.phone   // a phone has no folder here to show
-                        onClicked: VideoLibrary.showInFileManager(watch.path)
+                        visible: watch.path !== ""
+                        onClicked: {
+                            if (watch.details.phone)   // takes a moment: say so meanwhile
+                                watch.app.toast(qsTr("Finding %1 in File Explorer…").arg(watch.details.fileName),
+                                                { busy: true });
+                            VideoLibrary.showInFileManager(watch.path);
+                        }
 
                         ToolTip.visible: hovered
                         ToolTip.delay: 600
@@ -537,8 +720,9 @@ Item {
                             }
                             Text {
                                 Layout.fillWidth: true
-                                text: Qt.platform.os === "windows" ? (watch.details.folder ?? "").replace(/\//g, "\\")
-                                                                   : (watch.details.folder ?? "")
+                                text: watch.details.phone ? (watch.details.phoneFolder ?? "")
+                                    : Qt.platform.os === "windows" ? (watch.details.folder ?? "").replace(/\//g, "\\")
+                                    : (watch.details.folder ?? "")
                                 color: Theme.accent
                                 font.pixelSize: 13
                                 font.underline: locationLink.hovered
@@ -550,18 +734,17 @@ Item {
             }
         }
 
-        // Up next: the rest of the folder, then other videos.
-        ScrollView {
+        // Up next: the rest of the folder, then other videos. It reaches the window's edge,
+        // with its scroll bar there and the list stretched to just short of it.
+        PageScroll {
             id: side
-            x: watch.wide ? watch.watchRect.x + watch.watchRect.width + watch.pad : watch.pad
+            x: watch.wide ? watch.watchRect.x + watch.watchRect.width + watch.pad : watch.watchRect.x
             y: watch.wide ? watch.watchRect.y : info.y + info.height + 16
-            width: watch.wide ? watch.sideWidth : watch.width - 2 * watch.pad
+            width: watch.width - x
             height: watch.height - y
-            contentWidth: availableWidth
-            clip: true
 
             ColumnLayout {
-                width: side.availableWidth
+                width: side.availableWidth - side.ScrollBar.vertical.width - 6
                 spacing: 0
 
                 Rectangle {
@@ -570,7 +753,7 @@ Item {
                     implicitHeight: queueHeader.implicitHeight + queueList.height + 20
                     radius: Theme.radiusArt
                     color: Theme.surface
-                    border.color: "#26FFFFFF"
+                    border.color: Theme.border
 
                     Column {
                         id: queueHeader
@@ -581,9 +764,10 @@ Item {
 
                         Text {
                             width: parent.width
-                            text: VideoLibrary.folderName(watch.details.folder ?? "")
+                            text: watch.inPlaylist ? (watch.shuffled ? qsTr("Shuffle: %1") : qsTr("Play all: %1")).arg(watch.playlistName)
+                                                   : VideoLibrary.folderName(watch.details.folder ?? "")
                             color: Theme.textPrimary
-                            font.pixelSize: 16
+                            font.pixelSize: Theme.subsectionSize
                             font.weight: Font.Bold
                             elide: Text.ElideRight
                         }
@@ -597,6 +781,7 @@ Item {
 
                     ListView {
                         id: queueList
+                        SmoothWheel { flickable: queueList }
                         anchors.top: queueHeader.bottom
                         anchors.topMargin: 6
                         x: 4
@@ -611,12 +796,14 @@ Item {
                             thumbWidth: 112
                             titleLines: 2
                             current: model.path === watch.path
+                            path: model.path
                             title: model.title
                             subtitle: model.durationText
                             thumbnail: model.thumbnail
                             loading: model.thumbnailPending
                             durationText: model.durationText
                             progress: current ? 0 : model.progress
+                            watched: model.finished
                             onClicked: watch.open(model.path)
                         }
                     }
@@ -627,11 +814,11 @@ Item {
                     Layout.bottomMargin: 6
                     Layout.leftMargin: 8
                     visible: watch.suggestions !== null && watch.suggestions.count > 0
-                    text: watch.queue === null || watch.queue.count <= 1 ? qsTr("Up next")
-                        : watch.details.phone ? qsTr("More videos from this phone")
+                    // Not "Up next": autoplay only plays on through the list above.
+                    text: watch.details.phone ? qsTr("More videos from this phone")
                         : watch.details.external ? qsTr("More videos from this drive") : qsTr("More videos")
                     color: Theme.textPrimary
-                    font.pixelSize: 16
+                    font.pixelSize: Theme.subsectionSize
                     font.weight: Font.Bold
                 }
 
@@ -642,12 +829,14 @@ Item {
                         Layout.fillWidth: true
                         thumbWidth: 160
                         titleLines: 2
+                        path: model.path
                         title: model.title
                         subtitle: model.subtitle
                         thumbnail: model.thumbnail
                         loading: model.thumbnailPending
                         durationText: model.durationText
                         progress: model.progress
+                        watched: model.finished
                         onClicked: watch.open(model.path)
                     }
                 }
@@ -667,17 +856,18 @@ Item {
         blur: 32
         offset: Qt.vector2d(0, 8)
         color: "#E6000000"
-        opacity: watch.miniProgress
+        opacity: watch.miniProgress * frame.opacity
         visible: opacity > 0
     }
 
     Item {
         id: frame
-        x: watch.mix(watch.mix(watch.watchRect.x, 0, watch.fullProgress), watch.miniRect.x, watch.miniProgress)
+        x: watch.mix(watch.mix(watch.watchRect.x, 0, watch.fullProgress), watch.miniRect.x, watch.miniProgress) + watch.dismissX
         y: watch.mix(watch.mix(watch.watchRect.y, 0, watch.fullProgress), watch.miniRect.y, watch.miniProgress)
         width: watch.mix(watch.mix(watch.watchRect.width, watch.width, watch.fullProgress), watch.miniRect.width, watch.miniProgress)
         height: watch.mix(watch.mix(watch.watchRect.height, watch.height, watch.fullProgress), watch.miniRect.height, watch.miniProgress)
         clip: true
+        opacity: 1 - Math.min(1, Math.abs(watch.dismissX) / watch.miniWidth)
 
         Rectangle {
             anchors.fill: parent
@@ -726,31 +916,20 @@ Item {
         Item {
             anchors.fill: parent
 
-            // Click: pause. Double-click the middle: full screen. Double-click a side: skip 10 seconds.
+            // Click: pause. Double-click: full screen.
             TapHandler {
-                onTapped: eventPoint => {
+                onTapped: {
                     if (watch.mode === "mini") {
                         watch.expand();
                         return;
                     }
-                    // More taps on the same side, right after a double-tap, keep skipping.
-                    const side = watch.sideAt(eventPoint.position.x);
-                    if (seekBurst.running && side !== 0 && side === watch.seekSide) {
-                        clickTimer.stop();
-                        watch.tapSeek(side);
-                        return;
-                    }
                     clickTimer.restart();
                 }
-                onDoubleTapped: eventPoint => {
+                onDoubleTapped: {
                     if (watch.mode === "mini")
                         return;
                     clickTimer.stop();
-                    const side = watch.sideAt(eventPoint.position.x);
-                    if (side === 0)
-                        watch.toggleFull();
-                    else if (!seekBurst.running)   // otherwise the tap already skipped
-                        watch.tapSeek(side);
+                    watch.toggleFull();
                 }
             }
 
@@ -783,6 +962,8 @@ Item {
                         axis = Math.abs(delta.x) > Math.abs(delta.y) ? "h" : "v";
                     if (axis === "v" && watch.mode !== "full")
                         watch.miniProgress = Math.max(0, Math.min(1, startMini + delta.y / watch.dragRange));
+                    if (axis === "h" && watch.mode === "mini")
+                        watch.dismissX = delta.x;
                 }
             }
         }
@@ -805,8 +986,8 @@ Item {
             onHoveredChanged: hovered ? leaveTimer.stop() : leaveTimer.restart()
         }
 
-        // The "10 seconds" bubbles for double-tap seeking: a circle's edge
-        // coming in from the side, with the running total.
+        // The "10 seconds" bubbles for skipping: a circle's edge coming in from
+        // the side, with the running total.
         component SeekBubble: Item {
             id: bubble
             property int side: -1
@@ -823,7 +1004,7 @@ Item {
                 radius: bubble.diameter / 2
                 x: bubble.side < 0 ? frame.width * 0.36 - bubble.diameter : frame.width * 0.64
                 y: (frame.height - bubble.diameter) / 2
-                color: "#26FFFFFF"
+                color: Theme.pressed
             }
             Column {
                 x: (bubble.side < 0 ? frame.width * 0.18 : frame.width * 0.82) - width / 2
@@ -914,6 +1095,10 @@ Item {
                     focusPolicy: Qt.NoFocus
                     onClicked: mpv.togglePause()
 
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 600
+                    ToolTip.text: watch.playPauseTip
+
                     background: Rectangle {
                         radius: width / 2
                         color: Theme.accent
@@ -978,6 +1163,72 @@ Item {
                             font.features: { "tnum": 1 }
                         }
                         Item { Layout.fillWidth: true }
+                        // Playback speed: purple while it isn't normal.
+                        IconButton {
+                            id: speedButton
+                            iconName: "speed"
+                            iconColor: mpv.speed !== 1 ? Theme.accent : Theme.textPrimary
+                            tip: mpv.speed !== 1 ? qsTr("Playback speed: %1 (> / <)").arg(watch.speedText(mpv.speed))
+                                                 : qsTr("Playback speed (> / <)")
+                            onClicked: speedMenu.opened ? speedMenu.close() : speedMenu.open()
+
+                            AppMenu {
+                                id: speedMenu
+                                x: speedButton.width - width
+                                y: -height - 6
+                                width: 160
+
+                                Instantiator {
+                                    model: watch.speeds
+                                    delegate: AppMenuItem {
+                                        required property real modelData
+                                        text: modelData === 1 ? qsTr("Normal") : watch.speedText(modelData)
+                                        checkable: true
+                                        checked: Math.abs(mpv.speed - modelData) < 0.001
+                                        onTriggered: watch.setSpeed(modelData)
+                                    }
+                                    onObjectAdded: (index, object) => speedMenu.insertItem(index, object)
+                                    onObjectRemoved: (index, object) => speedMenu.removeItem(object)
+                                }
+                            }
+                        }
+                        // Only for videos with a choice of audio (dubs, commentary).
+                        IconButton {
+                            id: audioButton
+                            visible: mpv.audioTracks.length > 1
+                            iconName: "audiotrack"
+                            tip: qsTr("Audio track (A)")
+                            onClicked: audioMenu.opened ? audioMenu.close() : audioMenu.open()
+
+                            AppMenu {
+                                id: audioMenu
+                                x: audioButton.width - width
+                                y: -height - 6
+                                // Wide enough for the longest "English  ·  5.1  ·  AC-3" (the tick,
+                                // gap and padding besides).
+                                width: Math.min(watch.width - 32, Math.max(220, audioMetrics.advanceWidth + 80))
+
+                                TextMetrics {
+                                    id: audioMetrics
+                                    font.pixelSize: 15
+                                    text: mpv.audioTracks.reduce((longest, track) => track.label.length > longest.length
+                                                                 ? track.label : longest, "")
+                                }
+
+                                Instantiator {
+                                    model: mpv.audioTracks
+                                    delegate: AppMenuItem {
+                                        required property var modelData
+                                        text: modelData.label
+                                        checkable: true
+                                        checked: modelData.selected
+                                        onTriggered: watch.chooseAudio(modelData)
+                                    }
+                                    onObjectAdded: (index, object) => audioMenu.insertItem(index, object)
+                                    onObjectRemoved: (index, object) => audioMenu.removeItem(object)
+                                }
+                            }
+                        }
                         IconButton {
                             id: subtitleButton
                             iconName: "subtitles"
@@ -1015,7 +1266,7 @@ Item {
                                 MenuSeparator {
                                     contentItem: Rectangle {
                                         implicitHeight: 1
-                                        color: "#26FFFFFF"
+                                        color: Theme.border
                                     }
                                 }
                                 AppMenuItem {
@@ -1043,15 +1294,22 @@ Item {
                         }
                         IconButton {
                             iconName: mpv.muted || mpv.volume === 0 ? "volume_off" : "volume"
-                            tip: qsTr("Mute (M)")
+                            tip: mpv.muted ? qsTr("Unmute (M)") : qsTr("Mute (M)")
                             onClicked: mpv.muted = !mpv.muted
                         }
+                        // Up to 200%, as in VLC: quiet videos can be boosted (past 100% it's
+                        // amplified, and may distort). Sticks to 100% when dragged close to it.
                         AppSlider {
                             id: volumeSlider
-                            Layout.preferredWidth: 90
+                            Layout.preferredWidth: 120
                             from: 0
-                            to: 100
-                            onMoved: watch.setVolume(value)
+                            to: watch.maxVolume
+                            boostFrom: 100
+                            onMoved: {
+                                const volume = Math.abs(value - 100) < 4 ? 100 : Math.round(value);
+                                watch.setVolume(volume);
+                                watch.flash(volume === 0 ? "volume_off" : "volume", volume + "%");
+                            }
 
                             Binding {
                                 target: volumeSlider
@@ -1061,9 +1319,109 @@ Item {
                                 restoreMode: Binding.RestoreNone
                             }
                         }
+                        // Repeat, the picture, and the file itself.
+                        IconButton {
+                            id: moreButton
+                            iconName: "more"
+                            iconColor: watch.looping || watch.aspect !== "" || watch.fillScreen || watch.pictureRotation !== 0
+                                       ? Theme.accent : Theme.textPrimary
+                            tip: qsTr("More")
+                            onClicked: moreMenu.opened ? moreMenu.close() : moreMenu.open()
+
+                            AppMenu {
+                                id: moreMenu
+                                x: moreButton.width - width
+                                y: -height - 6
+                                width: 250
+
+                                component Heading: Text {
+                                    leftPadding: 46   // in line with the items' text
+                                    topPadding: 8
+                                    bottomPadding: 2
+                                    color: Theme.textTertiary
+                                    font.pixelSize: 12
+                                    font.weight: Font.DemiBold
+                                }
+                                component Line: MenuSeparator {
+                                    contentItem: Rectangle {
+                                        implicitHeight: 1
+                                        color: Theme.border
+                                    }
+                                }
+
+                                AppMenuItem {
+                                    text: qsTr("Repeat this video")
+                                    checkable: true
+                                    checked: watch.looping
+                                    onTriggered: {
+                                        watch.looping = !watch.looping;
+                                        watch.flash("repeat", watch.looping ? qsTr("Repeat on") : qsTr("Repeat off"));
+                                    }
+                                }
+
+                                Line {}
+                                Heading { text: qsTr("Picture") }
+                                AppMenuItem {
+                                    text: qsTr("Fill the screen (crop edges)")
+                                    checkable: true
+                                    checked: watch.fillScreen
+                                    onTriggered: {
+                                        watch.fillScreen = !watch.fillScreen;
+                                        watch.flash("fill", watch.fillScreen ? qsTr("Filling the screen") : qsTr("Whole picture"));
+                                    }
+                                }
+                                AppMenuItem {
+                                    text: watch.pictureRotation === 0 ? qsTr("Rotate 90°")
+                                                                      : qsTr("Rotate 90° (now %1°)").arg(watch.pictureRotation)
+                                    reserveCheck: true
+                                    onTriggered: watch.rotate()
+                                }
+                                Heading { text: qsTr("Aspect ratio") }
+                                Instantiator {
+                                    model: [{ value: "", label: qsTr("Original") }, { value: "16:9", label: "16:9" },
+                                            { value: "4:3", label: "4:3" }, { value: "21:9", label: "21:9" }]
+                                    delegate: AppMenuItem {
+                                        required property var modelData
+                                        text: modelData.label
+                                        checkable: true
+                                        checked: watch.aspect === modelData.value
+                                        onTriggered: watch.setAspect(modelData.value)
+                                    }
+                                    // After the "Aspect ratio" heading (the 6th entry).
+                                    onObjectAdded: (index, object) => moreMenu.insertItem(6 + index, object)
+                                    onObjectRemoved: (index, object) => moreMenu.removeItem(object)
+                                }
+
+                                Line {
+                                    visible: watch.details.canManage ?? false
+                                    height: visible ? implicitHeight : 0
+                                }
+                                AppMenuItem {
+                                    visible: watch.details.canManage ?? false
+                                    height: visible ? implicitHeight : 0
+                                    text: qsTr("Rename…")
+                                    reserveCheck: true
+                                    onTriggered: watch.app.renameVideo(watch.path)
+                                }
+                                AppMenuItem {
+                                    visible: watch.details.canManage ?? false
+                                    height: visible ? implicitHeight : 0
+                                    text: qsTr("Move to…")
+                                    reserveCheck: true
+                                    onTriggered: watch.app.moveVideo(watch.path)
+                                }
+                                AppMenuItem {
+                                    visible: watch.details.canManage ?? false
+                                    height: visible ? implicitHeight : 0
+                                    text: qsTr("Delete…")
+                                    reserveCheck: true
+                                    onTriggered: watch.app.deleteVideo(watch.path)
+                                }
+                            }
+                        }
                         IconButton {
                             iconName: watch.mode === "full" ? "fullscreen_exit" : "fullscreen"
-                            tip: qsTr("Full screen (F)")
+                            tip: watch.mode === "full" ? qsTr("Exit full screen (F)") : qsTr("Full screen (F)")
                             onClicked: watch.toggleFull()
                         }
                     }
@@ -1083,6 +1441,58 @@ Item {
                             value: mpv.position
                             restoreMode: Binding.RestoreNone
                         }
+
+                        // Hovering (or dragging) shows the frame there and its time, as on YouTube.
+                        // A phone's videos show just the time: the phone answers one request at a
+                        // time, and the video itself needs them.
+                        HoverHandler { id: seekHover }
+
+                        readonly property bool previewing: (seekHover.hovered || pressed) && mpv.duration > 0
+                        readonly property real previewX: pressed ? visualPosition * width
+                                                                 : Math.max(0, Math.min(width, seekHover.point.position.x))
+                        readonly property double previewTime: pressed ? value : previewX / Math.max(1, width) * mpv.duration
+                        readonly property bool showFrame: !(watch.details.phone ?? false)
+
+                        onPreviewTimeChanged: {
+                            if (previewing && showFrame)
+                                SeekPreview.request(watch.path, previewTime);
+                        }
+
+                        Rectangle {
+                            id: previewBubble
+                            visible: seekBar.previewing
+                            width: seekBar.showFrame ? 176 : timeLabel.implicitWidth + 20
+                            height: (seekBar.showFrame ? previewImage.height + 8 : 0) + timeLabel.implicitHeight + 12
+                            x: Math.max(-seekBar.x + 4, Math.min(seekBar.previewX - width / 2,
+                                                                 seekBar.width + 8 - width))
+                            y: -height - 10
+                            radius: 10
+                            color: "#E6000000"
+                            border.color: Theme.borderStrong
+
+                            Image {
+                                id: previewImage
+                                visible: seekBar.showFrame
+                                x: 4
+                                y: 4
+                                width: parent.width - 8
+                                height: Math.round(width * Math.max(0.3, Math.min(1.5, sourceSize.height / Math.max(1, sourceSize.width))))
+                                fillMode: Image.PreserveAspectFit
+                                cache: false
+                                source: seekBar.showFrame && SeekPreview.frame > 0 ? "image://seekpreview/" + SeekPreview.frame : ""
+                            }
+                            Text {
+                                id: timeLabel
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                anchors.bottom: parent.bottom
+                                anchors.bottomMargin: 6
+                                text: watch.formatTime(seekBar.previewTime)
+                                color: Theme.textPrimary
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                                font.features: { "tnum": 1 }
+                            }
+                        }
                     }
                 }
             }
@@ -1100,7 +1510,7 @@ Item {
             height: promptRow.implicitHeight + 24
             radius: Theme.radiusCard
             color: "#F21C1C1C"
-            border.color: "#26FFFFFF"
+            border.color: Theme.border
             opacity: wanted ? 1 : 0
             visible: opacity > 0
             Behavior on opacity { NumberAnimation { duration: 200 } }
@@ -1172,6 +1582,35 @@ Item {
             }
         }
 
+        // --- Subtitle files dragged over the window --------------------------------
+        Rectangle {
+            anchors.fill: parent
+            color: "#B3000000"
+            border.color: Theme.accent
+            border.width: 2
+            opacity: watch.subtitleDragging ? 1 : 0
+            visible: opacity > 0
+            Behavior on opacity { NumberAnimation { duration: 120 } }
+
+            Column {
+                anchors.centerIn: parent
+                spacing: 8
+                Icon {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    name: "subtitles"
+                    size: watch.miniProgress > 0.5 ? 28 : 40
+                    color: Theme.accent
+                }
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: qsTr("Drop to add subtitles")
+                    color: Theme.textPrimary
+                    font.pixelSize: watch.miniProgress > 0.5 ? 14 : 17
+                    font.weight: Font.Bold
+                }
+            }
+        }
+
         // --- What just changed: "45%", "Subtitles off", "Autoplay on" -------------
         Rectangle {
             id: indicator
@@ -1225,8 +1664,8 @@ Item {
             height: large ? upNextColumn.implicitHeight + 32 : 34
             anchors.verticalCenterOffset: large ? 0 : (parent.height - height) / 2
             radius: large ? Theme.radiusCard : 0
-            color: large ? "#F21C1C1C" : "#CC000000"
-            border.color: large ? "#26FFFFFF" : "transparent"
+            color: large ? "#F21C1C1C" : Theme.badge
+            border.color: large ? Theme.border : "transparent"
             opacity: watch.autoplayCountdown > 0 ? 1 : 0
             visible: opacity > 0
             Behavior on opacity { NumberAnimation { duration: 200 } }
@@ -1286,47 +1725,16 @@ Item {
                     Layout.fillWidth: true
                     spacing: 8
 
-                    AbstractButton {
-                        id: cancelButton
+                    DialogButton {
                         Layout.fillWidth: true
                         text: qsTr("Cancel")
-                        hoverEnabled: true
-                        focusPolicy: Qt.NoFocus
-                        padding: 10
                         onClicked: watch.cancelAutoplay()
-                        HoverHandler { cursorShape: Qt.PointingHandCursor }
-                        background: Rectangle {
-                            radius: height / 2
-                            color: cancelButton.hovered ? "#3A3A3A" : "#2A2A2A"
-                        }
-                        contentItem: Text {
-                            text: cancelButton.text
-                            horizontalAlignment: Text.AlignHCenter
-                            color: Theme.textPrimary
-                            font.pixelSize: 14
-                            font.weight: Font.DemiBold
-                        }
                     }
-                    AbstractButton {
-                        id: playNowButton
+                    DialogButton {
                         Layout.fillWidth: true
+                        primary: true
                         text: qsTr("Play now")
-                        hoverEnabled: true
-                        focusPolicy: Qt.NoFocus
-                        padding: 10
                         onClicked: watch.playNext()
-                        HoverHandler { cursorShape: Qt.PointingHandCursor }
-                        background: Rectangle {
-                            radius: height / 2
-                            color: playNowButton.hovered ? Qt.lighter(Theme.accent, 1.1) : Theme.accent
-                        }
-                        contentItem: Text {
-                            text: playNowButton.text
-                            horizontalAlignment: Text.AlignHCenter
-                            color: Theme.accentText
-                            font.pixelSize: 14
-                            font.weight: Font.Bold
-                        }
                     }
                 }
             }
@@ -1376,6 +1784,7 @@ Item {
                 height: 56
                 iconSize: 40
                 iconName: mpv.ended ? "replay" : mpv.paused ? "play" : "pause"
+                tip: watch.playPauseTip
                 onClicked: mpv.togglePause()
             }
         }
@@ -1393,15 +1802,9 @@ Item {
     FileDialog {
         id: subtitleDialog
         title: qsTr("Add a subtitle file")
-        currentFolder: watch.details.folder ? "file:///" + watch.details.folder : ""
-        nameFilters: [qsTr("Subtitles (*.srt *.ass *.ssa *.vtt *.sub)"), qsTr("All files (*)")]
-        onAccepted: {
-            const file = VideoLibrary.localPath(selectedFile);
-            mpv.addSubtitleFile(file);
-            watch.flash("subtitles", qsTr("Subtitles: %1").arg(file.split("/").pop()));
-            VideoLibrary.setSubtitleChoice(watch.path, file);
-            watch.subtitleOffer = "";
-        }
+        currentFolder: VideoLibrary.fileUrl(watch.details.folder || "")
+        nameFilters: [qsTr("Subtitles (%1)").arg(VideoLibrary.subtitleNameFilter()), qsTr("All files (*)")]
+        onAccepted: watch.addSubtitleFiles([VideoLibrary.localPath(selectedFile)])
     }
 
     // --- Keyboard ------------------------------------------------------------
@@ -1421,11 +1824,21 @@ Item {
     Key { sequence: "Shift+N"; onActivated: watch.playNext() }
     Key { sequence: "Shift+P"; onActivated: watch.playPrevious() }
     Key { sequence: "C"; onActivated: watch.toggleSubtitles() }
+    Key { sequence: "A"; onActivated: watch.cycleAudio() }
+    // Shift+. and Shift+, as on YouTube.
+    Key { sequences: [">", "Shift+>"]; onActivated: watch.stepSpeed(1) }
+    Key { sequences: ["<", "Shift+<"]; onActivated: watch.stepSpeed(-1) }
     Key { sequence: "Esc"; onActivated: watch.mode === "full" ? watch.exitFull() : watch.minimize() }
+    // In the mini player: I brings the watch page back, and Space plays and pauses (a search
+    // box being typed in keeps its spaces).
     Shortcut {
-        // In the mini player, I brings the watch page back.
         enabled: watch.mode === "mini"
         sequences: ["I"]
         onActivated: watch.expand()
+    }
+    Shortcut {
+        enabled: watch.mode === "mini"
+        sequences: ["Space"]
+        onActivated: mpv.togglePause()
     }
 }

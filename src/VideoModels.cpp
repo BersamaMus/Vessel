@@ -3,6 +3,7 @@
 #include "VideoLibrary.h"
 
 #include <QCollator>
+#include <QDate>
 #include <QLocale>
 #include <QMap>
 #include <QQmlEngine>
@@ -145,11 +146,32 @@ VideoModel::VideoModel(QObject *parent)
 {
 }
 
+HistoryModel::HistoryModel(VideoLibrary *library, Source source, QObject *parent)
+    : VideoModel(parent)
+{
+    attach(library, std::move(source));
+}
+
+QString HistoryModel::detailOf(const VideoInfo &video) const
+{
+    const QDate day = QDateTime::fromMSecsSinceEpoch(video.watchedAt).date();
+    const QDate today = QDate::currentDate();
+    if (day == today)
+        return tr("Today");
+    if (day == today.addDays(-1))
+        return tr("Yesterday");
+    const QLocale locale = QLocale::system();
+    if (day > today.addDays(-7))
+        return locale.dayName(day.dayOfWeek());   // "Monday"
+    return locale.toString(day, day.year() == today.year() ? QStringLiteral("d MMMM") : QStringLiteral("d MMMM yyyy"));
+}
+
 void VideoModel::attach(VideoLibrary *library, Source source)
 {
     m_library = library;
     m_source = std::move(source);
     connect(library, &VideoLibrary::videoChanged, this, &VideoModel::onVideoChanged);
+    connect(library, &VideoLibrary::libraryReset, this, [this] { m_stale = true; });
     connect(library, &VideoLibrary::thumbnailsQueued, this, [this] {
         if (!m_rows.isEmpty())
             emit dataChanged(index(0), index(m_rows.size() - 1), {ThumbnailPendingRole});
@@ -162,8 +184,14 @@ void VideoModel::refresh()
     if (!m_library || !m_source)
         return;
     QList<int> rows = m_source();
-    if (rows == m_rows)
+    const bool stale = std::exchange(m_stale, false);
+    if (rows == m_rows) {
+        // The same rows, but the library was rebuilt: what's at them may have changed (a
+        // renamed video sorts into the same place).
+        if (stale && !m_rows.isEmpty())
+            emit dataChanged(index(0), index(int(m_rows.size()) - 1));
         return;
+    }
     const bool countChanges = rows.size() != m_rows.size();
     beginResetModel();
     m_rows = std::move(rows);
@@ -248,6 +276,17 @@ QString VideoModel::pathAt(int row) const
     return m_library->video(m_rows[row]).path;
 }
 
+QStringList VideoModel::paths() const
+{
+    QStringList list;
+    if (!m_library)
+        return list;
+    list.reserve(m_rows.size());
+    for (int row : m_rows)
+        list.append(m_library->video(row).path);
+    return list;
+}
+
 int VideoModel::indexOf(const QString &path) const
 {
     for (int row = 0; row < m_rows.size(); ++row)
@@ -267,7 +306,7 @@ VideoQuery::VideoQuery(QObject *parent)
 
 void VideoQuery::componentComplete()
 {
-    auto *library = qmlEngine(this)->singletonInstance<VideoLibrary *>("BetterVideoPlayer", "VideoLibrary");
+    auto *library = qmlEngine(this)->singletonInstance<VideoLibrary *>("Vessel", "VideoLibrary");
     m_complete = true;
     attach(library, [this] { return find(); });
     library->track(this);

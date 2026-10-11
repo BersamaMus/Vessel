@@ -1,9 +1,13 @@
 import QtQuick
 import QtQuick.Controls.Basic
 
-// Blimp's slider: a yellow track with a white thumb, thicker on hover.
+// The slider: a purple track with a white thumb, thicker on hover.
 Slider {
     id: control
+
+    // A value past which the track turns orange, with a tick there (volume over 100%); -1 for none.
+    property real boostFrom: -1
+    readonly property real boostPosition: boostFrom >= 0 && to > from ? (boostFrom - from) / (to - from) : 1
 
     hoverEnabled: true
     focusPolicy: Qt.NoFocus
@@ -24,10 +28,28 @@ Slider {
             color: "#40FFFFFF"
         }
         Rectangle {
-            width: control.visualPosition * parent.width
+            width: Math.min(control.visualPosition, control.boostPosition) * parent.width
             height: parent.height
             radius: height / 2
             color: Theme.accent
+        }
+        // Past boostFrom (a volume over 100%): orange, from a tick at the boundary.
+        Rectangle {
+            visible: control.boostFrom >= 0 && control.visualPosition > control.boostPosition
+            x: control.boostPosition * parent.width - radius
+            width: (control.visualPosition - control.boostPosition) * parent.width + radius
+            height: parent.height
+            radius: height / 2
+            color: Theme.boost
+        }
+        Rectangle {
+            visible: control.boostFrom >= 0
+            x: control.boostPosition * parent.width - 1
+            anchors.verticalCenter: parent.verticalCenter
+            width: 2
+            height: 10
+            radius: 1
+            color: "#99FFFFFF"
         }
     }
 

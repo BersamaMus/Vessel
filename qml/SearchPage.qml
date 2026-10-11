@@ -31,6 +31,14 @@ FocusScope {
         field.selectAll();
     }
 
+    // Esc (see Main.goBack): clears what's typed first.
+    function handleBack() {
+        if (field.text === "")
+            return false;
+        field.clear();
+        return true;
+    }
+
     // Remembered once the user acts on what they found.
     function commit() {
         if (query !== "")
@@ -52,81 +60,80 @@ FocusScope {
         anchors.fill: parent
         spacing: 0
 
-        RowLayout {
+        PageBar {
             Layout.fillWidth: true
-            Layout.leftMargin: page.StackView.index > 0 ? 8 : Theme.pagePadding
-            Layout.rightMargin: Theme.pagePadding
-            Layout.topMargin: 14
-            spacing: 8
+            scrolled: page.showResults && !grid.atYBeginning
 
-            IconButton {
-                visible: page.StackView.index > 0
-                iconName: "back"
-                tip: qsTr("Back")
-                onClicked: page.StackView.view.pop()
-            }
-
-            // The search box.
-            Rectangle {
+            RowLayout {
                 Layout.fillWidth: true
-                Layout.maximumWidth: 720
-                implicitHeight: 48
-                radius: height / 2
-                color: Theme.surfaceHigh
-                border.color: field.activeFocus ? "#80FACC15" : "transparent"
+                Layout.leftMargin: page.StackView.index > 0 ? 8 : Theme.pagePadding
+                Layout.rightMargin: Theme.pagePadding
+                Layout.topMargin: 14
+                spacing: 8
 
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: 16
-                    anchors.rightMargin: 4
-                    spacing: 10
+                IconButton {
+                    visible: page.StackView.index > 0
+                    iconName: "back"
+                    tip: qsTr("Back (Esc)")
+                    onClicked: page.StackView.view.pop()
+                }
 
-                    Icon {
-                        name: "search"
-                        color: Theme.textSecondary
-                    }
-                    TextField {
-                        id: field
-                        Layout.fillWidth: true
-                        focus: true
-                        placeholderText: qsTr("Search %1").arg(page.scopeName)
-                        placeholderTextColor: Theme.textTertiary
-                        color: Theme.textPrimary
-                        selectionColor: Theme.accent
-                        selectedTextColor: Theme.accentText
-                        font.pixelSize: 17
-                        background: null
-                        leftPadding: 0
-                        onAccepted: page.commit()
-                        Keys.onEscapePressed: {
-                            if (text !== "")
-                                clear();
-                            else if (page.StackView.index > 0)
-                                page.StackView.view.pop();
+                // The search box.
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.maximumWidth: 720
+                    implicitHeight: 48
+                    radius: height / 2
+                    color: Theme.surfaceHigh
+                    border.color: field.activeFocus ? Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.5) : "transparent"
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 16
+                        anchors.rightMargin: 4
+                        spacing: 10
+
+                        Icon {
+                            name: "search"
+                            color: Theme.textSecondary
                         }
-                    }
-                    IconButton {
-                        visible: field.text !== ""
-                        iconName: "close"
-                        iconColor: Theme.textSecondary
-                        tip: qsTr("Clear")
-                        onClicked: {
-                            field.clear();
-                            field.forceActiveFocus();
+                        TextField {
+                            id: field
+                            Layout.fillWidth: true
+                            focus: true
+                            placeholderText: qsTr("Search %1").arg(page.scopeName)
+                            placeholderTextColor: Theme.textTertiary
+                            color: Theme.textPrimary
+                            selectionColor: Theme.accent
+                            selectedTextColor: Theme.accentText
+                            font.pixelSize: 17
+                            background: null
+                            leftPadding: 0
+                            onAccepted: page.commit()
+                        }
+                        IconButton {
+                            visible: field.text !== ""
+                            iconName: "close"
+                            iconColor: Theme.textSecondary
+                            tip: qsTr("Clear")
+                            onClicked: {
+                                field.clear();
+                                field.forceActiveFocus();
+                            }
                         }
                     }
                 }
             }
-        }
 
-        FilterBar {
-            id: filterBar
-            Layout.fillWidth: true
-            Layout.leftMargin: Theme.pagePadding
-            Layout.rightMargin: Theme.pagePadding
-            Layout.topMargin: 16
-            query: results
-            searching: true
+            FilterBar {
+                id: filterBar
+                Layout.fillWidth: true
+                Layout.leftMargin: Theme.pagePadding
+                Layout.rightMargin: Theme.pagePadding
+                Layout.topMargin: 16
+                query: results
+                searching: true
+            }
         }
 
         // --- Recent searches ---------------------------------------------
@@ -144,7 +151,7 @@ FocusScope {
             Layout.bottomMargin: 8
             text: qsTr("Recent searches")
             color: Theme.textPrimary
-            font.pixelSize: 20
+            font.pixelSize: Theme.sectionSize
             font.weight: Font.Bold
         }
 
@@ -197,6 +204,7 @@ FocusScope {
         // --- Results -------------------------------------------------------
         GridView {
             id: grid
+            SmoothWheel { flickable: grid }
             Layout.fillWidth: true
             Layout.fillHeight: true
             visible: page.showResults
@@ -242,12 +250,14 @@ FocusScope {
                     height: grid.cellHeight
                     thumbWidth: 176
                     titleLines: 2
+                    path: cell.model.path
                     title: cell.model.title
                     subtitle: [cell.model.subtitle, cell.model.detail, cell.model.remainingText].filter(part => part).join("  •  ")
                     thumbnail: cell.model.thumbnail
                     loading: cell.model.thumbnailPending
                     durationText: cell.model.durationText
                     progress: cell.model.progress
+                    watched: cell.model.finished
                     onClicked: {
                         page.commit();
                         page.app.play(cell.model.path);

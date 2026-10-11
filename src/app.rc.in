@@ -1,0 +1,30 @@
+// The exe's icon and version information: Windows shows its description as the app's name
+// (Task Manager, the media flyout, "Open with"). Filled in by CMake.
+#include <winver.h>
+
+// The first icon is the exe's (Explorer, the taskbar, and Qt's windows).
+IDI_ICON1 ICON "@APP_ICON@"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "@APP_DISPLAY_NAME@"
+            VALUE "ProductName", "@APP_DISPLAY_NAME@"
+            VALUE "InternalName", "@APP_DISPLAY_NAME@"
+            VALUE "OriginalFilename", "VesselPlayer.exe"
+            VALUE "FileVersion", "@PROJECT_VERSION@"
+            VALUE "ProductVersion", "@PROJECT_VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

@@ -1,7 +1,10 @@
 #include "VideoLibrary.h"
 
+#include "DriveEject.h"
 #include "DriveWatcher.h"
+#include "FolderWatcher.h"
 #include "Thumbnailer.h"
+#include "VideoFormats.h"
 #include "VideoModels.h"
 
 #include <QCollator>
@@ -13,8 +16,10 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFutureWatcher>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QLocale>
+#include <QPromise>
 #include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QSaveFile>
@@ -32,8 +37,8 @@
 #include <QDesktopServices>
 #endif
 
-// Timings of scans and library updates: QT_LOGGING_RULES="bvp.perf.debug=true".
-Q_LOGGING_CATEGORY(lcPerf, "bvp.perf", QtWarningMsg)
+// Timings of scans and library updates: QT_LOGGING_RULES="vessel.perf.debug=true".
+Q_LOGGING_CATEGORY(lcPerf, "vessel.perf", QtWarningMsg)
 
 namespace {
 
@@ -61,12 +66,16 @@ QString withSlash(const QString &folder)
 
 bool isVideoFile(const QFileInfo &file)
 {
-    static const QSet<QString> extensions = {
-        "mp4", "m4v", "mkv", "mov", "webm", "avi", "wmv", "flv", "ts", "m2ts",
-        "mts", "mpg", "mpeg", "3gp", "ogv", "divx", "asf", "rmvb",
-    };
     // Empty files are unfinished downloads; they can't be played.
-    return extensions.contains(file.suffix().toLower()) && file.size() > 0;
+    return VideoFormats::isVideoSuffix(file.suffix()) && file.size() > 0
+        && VideoFormats::looksLikeVideo(file.filePath());
+}
+
+// A video editor's own renders, not anyone's videos: Premiere Pro's previews (hundreds of
+// "Rendered - <id>.mpeg" files per project).
+bool isEditorCache(const QString &folder)
+{
+    return folder.contains(QLatin1String("/Adobe Premiere Pro Video Previews"), Qt::CaseInsensitive);
 }
 
 // "Spider-Man Homecoming (2017)" -> "spidermanhomecoming2017", so names that only
@@ -144,94 +153,198 @@ QList<VideoInfo> sortedByPath(QList<VideoInfo> videos)
     return sorted;
 }
 
-// Every video under `root`, in natural path order, with everything that can be worked
-// out from the file system alone (on the scanning thread, keeping the UI free).
-// `sourceName` is what the library folder or drive is called, for search.
-QList<VideoInfo> scanFolder(const QString &root, bool external, const QString &driveId,
-                            const QString &sourceName, std::shared_ptr<std::atomic_int> found)
+// A folder's search text: where it is under `root`, and what `root` is called.
+QString placeKeyOf(const QString &dir, const QString &root, const QString &sourceName)
 {
-    QList<VideoInfo> videos;
-    const QString prefix = withSlash(root);
-    // One copy of each folder's path (and its search text), shared by its videos.
-    struct Folder
-    {
-        QString path;
-        QString placeKey;
-    };
-    QHash<QString, Folder> folders;
-    // Hidden and system folders (the recycle bin, System Volume Information) are skipped.
-    QDirIterator it(root, QDir::Files, QDirIterator::Subdirectories);
-    while (it.hasNext()) {
-        const QFileInfo file = it.nextFileInfo();
-        if (!isVideoFile(file))
-            continue;
-
-        VideoInfo video;
-        video.path = file.absoluteFilePath();
-        video.key = external ? QStringLiteral("drive:%1/%2").arg(driveId, video.path.mid(prefix.size()))
-                             : video.path;
-        const QString baseName = file.completeBaseName();
-        video.title = prettyTitle(baseName);
-        video.year = yearIn(baseName);
-        const QString dir = file.absolutePath();
-        auto folder = folders.find(dir);
-        if (folder == folders.end()) {
-            const QString inside = dir == root ? QString() : dir.mid(prefix.size());
-            folder = folders.insert(dir, {dir, searchKey(inside + QLatin1Char(' ') + sourceName)});
-        }
-        video.dir = folder->path;
-        video.placeKey = folder->placeKey;
-        video.root = root;
-        video.type = file.suffix().toLower();
-        video.external = external;
-        video.size = file.size();
-        video.modified = file.lastModified();
-        // Creation time is when the file was copied here, so it's when it was "added".
-        const QDateTime born = file.birthTime();
-        video.added = born.isValid() ? born : video.modified;
-        video.cacheKey = cacheKeyOf(video.key, video.size, video.modified);
-        video.titleKey = searchKey(video.title);
-        videos.append(std::move(video));
-        ++*found;
-    }
-
-    return sortedByPath(std::move(videos));
+    const QString inside = dir == root ? QString() : dir.mid(withSlash(root).size());
+    return searchKey(inside + QLatin1Char(' ') + sourceName);
 }
 
-// Every video on a phone (see scanFolder), found over MTP.
-QList<VideoInfo> scanPhone(const QString &root, const QString &serial, const QString &sourceName,
-                           std::shared_ptr<std::atomic_int> found)
+// A video file under `root` (a library folder or drive), with everything that can be
+// worked out from the file system alone. `placeKey` is its folder's search text.
+VideoInfo fileVideo(const QFileInfo &file, const QString &root, bool external, const QString &driveId,
+                    const QString &placeKey)
 {
-    QList<VideoInfo> videos;
+    VideoInfo video;
+    video.path = file.absoluteFilePath();
+    video.key = external ? QStringLiteral("drive:%1/%2").arg(driveId, video.path.mid(withSlash(root).size()))
+                         : video.path;
+    const QString baseName = file.completeBaseName();
+    video.title = prettyTitle(baseName);
+    video.year = yearIn(baseName);
+    video.dir = file.absolutePath();
+    video.placeKey = placeKey;
+    video.root = root;
+    video.type = file.suffix().toLower();
+    video.external = external;
+    video.size = file.size();
+    video.modified = file.lastModified();
+    // Creation time is when the file was copied here, so it's when it was "added".
+    const QDateTime born = file.birthTime();
+    video.added = born.isValid() ? born : video.modified;
+    video.cacheKey = cacheKeyOf(video.key, video.size, video.modified);
+    video.titleKey = searchKey(video.title);
+    return video;
+}
+
+// How often a scan reports what it's found so far (the first batch goes at once): each
+// report relists the library, so not for every folder.
+constexpr int kScanReportMs = 1000;
+
+// Every video under `root` (on the scanning thread, keeping the UI free), a folder at a
+// time: each folder's videos, then its sub-folders' in natural order, so whole folders are
+// finished one after another. Reported in batches as they're found, so finished folders
+// can be browsed (and get their thumbnails) while the rest is still being looked through.
+// `sourceName` is what the library folder or drive is called, for search.
+void scanFolder(QPromise<QList<VideoInfo>> &promise, const QString &root, bool external, const QString &driveId,
+                const QString &sourceName, std::shared_ptr<std::atomic_int> found)
+{
+    QCollator collator;
+    collator.setNumericMode(true);
+    collator.setCaseSensitivity(Qt::CaseInsensitive);
+
+    QList<VideoInfo> batch;
+    QElapsedTimer sinceReport;
+    bool reported = false;
+    QStringList stack{root};
+    while (!stack.isEmpty()) {
+        const QString dir = stack.takeLast();
+        const QDir here(dir);
+        // Hidden and system folders (the recycle bin, System Volume Information) are skipped,
+        // and links to folders aren't followed.
+        if (!isEditorCache(dir)) {
+            const QString placeKey = placeKeyOf(dir, root, sourceName);
+            QList<VideoInfo> videos;
+            for (const QFileInfo &file : here.entryInfoList(QDir::Files)) {
+                if (!isVideoFile(file))
+                    continue;
+                videos.append(fileVideo(file, root, external, driveId, placeKey));
+                ++*found;
+            }
+            batch += sortedByPath(std::move(videos));
+        }
+        QStringList subfolders = here.entryList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks);
+        std::sort(subfolders.begin(), subfolders.end(), [&](const QString &a, const QString &b) {
+            return collator.compare(a, b) < 0;
+        });
+        // Last pushed is looked in first: the first sub-folder next.
+        for (auto it = subfolders.crbegin(); it != subfolders.crend(); ++it)
+            stack.append(here.filePath(*it));
+
+        if (!batch.isEmpty() && (!reported || sinceReport.elapsed() >= kScanReportMs)) {
+            promise.addResult(std::exchange(batch, {}));
+            reported = true;
+            sinceReport.start();
+        }
+    }
+    if (!batch.isEmpty())
+        promise.addResult(batch);
+}
+
+// A video on a phone, whose root is "mtp://<serial>". `placeKeys` shares each folder's
+// search text between its videos.
+VideoInfo phoneVideo(const QString &root, const QString &serial, const QString &sourceName, const Phones::File &file,
+                     QHash<QString, QString> &placeKeys)
+{
+    VideoInfo video;
+    video.path = root + QLatin1Char('/') + file.path;
+    video.key = QStringLiteral("phone:%1/%2").arg(serial, file.path);
+    const QString name = file.path.section(QLatin1Char('/'), -1);
+    const QString baseName = name.contains(QLatin1Char('.')) ? name.section(QLatin1Char('.'), 0, -2) : name;
+    video.title = prettyTitle(baseName);
+    video.year = yearIn(baseName);
+    const QString inside = file.path.contains(QLatin1Char('/')) ? file.path.section(QLatin1Char('/'), 0, -2) : QString();
+    video.dir = inside.isEmpty() ? root : root + QLatin1Char('/') + inside;
+    auto place = placeKeys.find(inside);
+    if (place == placeKeys.end())
+        place = placeKeys.insert(inside, searchKey(inside + QLatin1Char(' ') + sourceName));
+    video.placeKey = *place;
+    video.root = root;
+    video.type = name.section(QLatin1Char('.'), -1).toLower();
+    video.external = true;
+    video.phone = true;
+    video.objectId = file.objectId;
+    video.size = file.size;
+    video.modified = file.modified;
+    video.added = file.modified;
+    video.cacheKey = cacheKeyOf(video.key, video.size, video.modified);
+    video.titleKey = searchKey(video.title);
+    return video;
+}
+
+// Every video on a phone (see scanFolder), found over MTP. Reported in batches as they're
+// found (the first straight away, then about once a second): the first time after it's
+// plugged in, a phone can take a minute to list everything.
+void scanPhone(QPromise<QList<VideoInfo>> &promise, const QString &root, const QString &serial,
+               const QString &sourceName, std::shared_ptr<std::atomic_int> found)
+{
+    QList<VideoInfo> batch;
     QHash<QString, QString> placeKeys;   // folder inside the phone -> its search text
-    Phones::findVideos(serial, [&](const Phones::File &file) {
-        VideoInfo video;
-        video.path = root + QLatin1Char('/') + file.path;
-        video.key = QStringLiteral("phone:%1/%2").arg(serial, file.path);
-        const QString name = file.path.section(QLatin1Char('/'), -1);
-        const QString baseName = name.contains(QLatin1Char('.')) ? name.section(QLatin1Char('.'), 0, -2) : name;
-        video.title = prettyTitle(baseName);
-        video.year = yearIn(baseName);
-        const QString inside = file.path.contains(QLatin1Char('/')) ? file.path.section(QLatin1Char('/'), 0, -2) : QString();
-        video.dir = inside.isEmpty() ? root : root + QLatin1Char('/') + inside;
-        auto place = placeKeys.find(inside);
-        if (place == placeKeys.end())
-            place = placeKeys.insert(inside, searchKey(inside + QLatin1Char(' ') + sourceName));
-        video.placeKey = *place;
-        video.root = root;
-        video.type = name.section(QLatin1Char('.'), -1).toLower();
-        video.external = true;
-        video.phone = true;
-        video.objectId = file.objectId;
-        video.size = file.size;
-        video.modified = file.modified;
-        video.added = file.modified;
-        video.cacheKey = cacheKeyOf(video.key, video.size, video.modified);
-        video.titleKey = searchKey(video.title);
-        videos.append(std::move(video));
-        ++*found;
+    QElapsedTimer sinceReport;
+    bool reported = false;
+    Phones::findVideos(serial, [&](const QList<Phones::File> &files) {
+        for (const Phones::File &file : files) {
+            batch.append(phoneVideo(root, serial, sourceName, file, placeKeys));
+            ++*found;
+        }
+        if (!batch.isEmpty() && (!reported || sinceReport.elapsed() >= kScanReportMs)) {
+            promise.addResult(std::exchange(batch, {}));
+            reported = true;
+            sinceReport.start();
+        }
         return true;
     });
+    if (!batch.isEmpty())
+        promise.addResult(batch);
+}
+
+// What was found on a phone, kept for showing straight away the next time it's plugged in
+// (while it's searched again): phones/<serial>.json in the data folder.
+QString phoneListFile(const QString &dataDir, const QString &serial)
+{
+    QString name = serial;
+    name.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_-]")), QStringLiteral("_"));
+    return dataDir + QStringLiteral("/phones/") + name + QStringLiteral(".json");
+}
+
+void savePhoneList(const QString &dataDir, const QString &serial, const QList<VideoInfo> &videos)
+{
+    QJsonArray list;
+    for (const VideoInfo &v : videos) {
+        QJsonObject entry{{"path", v.path.mid(v.root.size() + 1)}, {"size", v.size}};
+        if (v.modified.isValid())
+            entry.insert(QLatin1String("modified"), v.modified.toMSecsSinceEpoch());
+        list.append(entry);
+    }
+    QDir().mkpath(dataDir + QStringLiteral("/phones"));
+    QSaveFile file(phoneListFile(dataDir, serial));
+    if (file.open(QIODevice::WriteOnly)) {
+        file.write(QJsonDocument(QJsonObject{{"videos", list}}).toJson(QJsonDocument::Compact));
+        file.commit();
+    }
+}
+
+// The videos found on a phone last time, without their object ids: MTP numbers a phone's
+// files afresh each time it's connected.
+QList<VideoInfo> loadPhoneList(const QString &dataDir, const QString &root, const QString &serial,
+                               const QString &sourceName)
+{
+    QFile file(phoneListFile(dataDir, serial));
+    if (!file.open(QIODevice::ReadOnly))
+        return {};
+    QList<VideoInfo> videos;
+    QHash<QString, QString> placeKeys;
+    const QJsonArray list = QJsonDocument::fromJson(file.readAll()).object().value(QLatin1String("videos")).toArray();
+    for (const QJsonValue &value : list) {
+        const QJsonObject entry = value.toObject();
+        Phones::File f;
+        f.path = entry.value(QLatin1String("path")).toString();
+        f.size = entry.value(QLatin1String("size")).toInteger();
+        if (entry.contains(QLatin1String("modified")))
+            f.modified = QDateTime::fromMSecsSinceEpoch(entry.value(QLatin1String("modified")).toInteger());
+        if (!f.path.isEmpty())
+            videos.append(phoneVideo(root, serial, sourceName, f, placeKeys));
+    }
     return sortedByPath(std::move(videos));
 }
 
@@ -245,8 +358,8 @@ bool isFinished(double position, double duration)
 
 VideoLibrary::VideoLibrary(QObject *parent)
     : QObject(parent)
-    // BVP_DATA_DIR points a test copy at its own settings, history and cache.
-    , m_dataDir(qEnvironmentVariable("BVP_DATA_DIR",
+    // VESSEL_DATA_DIR points a test copy at its own settings, history and cache.
+    , m_dataDir(qEnvironmentVariable("VESSEL_DATA_DIR",
                                      QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)))
     , m_pickSeed(QRandomGenerator::global()->generate())
 {
@@ -285,6 +398,15 @@ VideoLibrary::VideoLibrary(QObject *parent)
     // Home's shelves are about the library, not whatever drive is plugged in.
     m_continueWatching = new VideoModel(this, [this] { return startedIn(QString()); }, this);
 
+    m_historyModel = new HistoryModel(this, [this] {
+        QList<int> rows;
+        for (int i = 0; i < m_videos.size(); ++i)
+            if (m_videos[i].watchedAt > 0)
+                rows.append(i);
+        std::sort(rows.begin(), rows.end(), [this](int a, int b) { return m_videos[a].watchedAt > m_videos[b].watchedAt; });
+        return rows;
+    }, this);
+
     m_recentlyAdded = new VideoModel(this, [this] {
         QList<int> rows;
         for (int i = 0; i < m_videos.size(); ++i)
@@ -318,6 +440,42 @@ VideoLibrary::VideoLibrary(QObject *parent)
     // Drives already plugged in at startup aren't announced; ones plugged in later are.
     for (VideoSource &source : m_sources)
         source.announce = false;
+
+    // Videos added to (or removed from) a library folder show up without a rescan, a
+    // moment after the last change (copying a film is many changes).
+    m_folderWatcher = new FolderWatcher(this);
+    connect(m_folderWatcher, &FolderWatcher::changed, this, &VideoLibrary::onFolderChanged);
+    connect(m_folderWatcher, &FolderWatcher::removed, this, [this](const QString &folder, const QStringList &paths) {
+        for (const QString &path : paths) {
+            const QString prefix = withSlash(path);
+            const bool hadVideos = std::any_of(m_videos.cbegin(), m_videos.cend(), [&](const VideoInfo &v) {
+                return v.path.startsWith(prefix, Qt::CaseInsensitive);
+            });
+            if (hadVideos) {
+                onFolderChanged(folder);
+                return;
+            }
+        }
+    });
+    m_rebuildTimer.setSingleShot(true);
+    connect(&m_rebuildTimer, &QTimer::timeout, this, &VideoLibrary::rebuild);
+    m_changeTimer.setSingleShot(true);
+    m_changeTimer.setInterval(2000);
+    connect(&m_changeTimer, &QTimer::timeout, this, [this] {
+        const QSet<QString> folders = std::exchange(m_changedFolders, {});
+        for (const QString &folder : folders) {
+            const int index = sourceIndex(folder);
+            if (index < 0)
+                continue;
+            if (m_sources[index].scanning)
+                onFolderChanged(folder);   // after this scan, look again
+            else
+                scanSource(folder);
+        }
+    });
+    connect(this, &VideoLibrary::libraryFoldersChanged, this, &VideoLibrary::updateWatchedFolders);
+    connect(m_driveWatcher, &DriveWatcher::drivesChanged, this, &VideoLibrary::updateWatchedFolders);
+    updateWatchedFolders();
 
     m_phoneTimer.setInterval(2000);
     connect(&m_phoneTimer, &QTimer::timeout, this, &VideoLibrary::pollPhones);
@@ -442,17 +600,17 @@ void VideoLibrary::onPhonesChanged(const QList<Phones::Phone> &phones)
                 return &p;
         return static_cast<const Phones::Phone *>(nullptr);
     };
-    bool removed = false;
+    bool relist = false;   // the list of videos changed
     for (int i = m_sources.size() - 1; i >= 0; --i) {
         const VideoSource &source = m_sources[i];
         if (!source.phone || readyPhone(source.driveId))
             continue;
         // Unplugged, or locked again.
         const QString path = source.path;
-        emit driveRemoved(path, source.name);   // while its videos are still known
+        emit driveRemoved(path, source.name, false);   // while its videos are still known
         m_sources.removeAt(i);
         m_scanned.remove(path);
-        removed = true;
+        relist = true;
     }
     for (const Phones::Phone &phone : phones) {
         if (!phone.ready)
@@ -475,9 +633,15 @@ void VideoLibrary::onPhonesChanged(const QList<Phones::Phone> &phones)
         source.bytesFree = phone.bytesFree;
         source.announce = announce;
         m_sources.append(source);
+        // What was on it last time, while it's searched again.
+        QList<VideoInfo> remembered = loadPhoneList(m_dataDir, path, phone.serial, sourceName(path));
+        if (!remembered.isEmpty()) {
+            m_scanned.insert(path, std::move(remembered));
+            relist = true;
+        }
         scanSource(path);
     }
-    if (removed)
+    if (relist)
         rebuild();
     emit drivesChanged();
 }
@@ -530,19 +694,69 @@ void VideoLibrary::scanSource(const QString &path)
     if (source.external)
         emit drivesChanged();
 
+    // The videos come in batches, each shown (and given thumbnails) as it arrives; the
+    // finished list then replaces what was there, dropping videos that have gone.
     auto *watcher = new QFutureWatcher<QList<VideoInfo>>(this);
     QElapsedTimer timer;
     timer.start();
+    connect(watcher, &QFutureWatcherBase::resultsReadyAt, this, [this, watcher, path, timer](int begin, int end) {
+        for (int i = begin; i < end; ++i)
+            onVideosFound(path, watcher->resultAt(i));
+        qCDebug(lcPerf) << "videos so far in" << path << ":" << watcher->future().resultCount() << "batches in"
+                        << timer.elapsed() << "ms";
+    });
     connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, path, timer] {
         watcher->deleteLater();
-        qCDebug(lcPerf) << "scanned" << path << watcher->result().size() << "videos in" << timer.elapsed() << "ms";
-        onScanFinished(path, watcher->result());
+        QList<VideoInfo> videos;
+        for (const QList<VideoInfo> &batch : watcher->future().results())
+            videos += batch;
+        qCDebug(lcPerf) << "scanned" << path << videos.size() << "videos in" << timer.elapsed() << "ms";
+        onScanFinished(path, sortedByPath(std::move(videos)));
     });
     if (source.phone)
         watcher->setFuture(QtConcurrent::run(scanPhone, source.path, source.driveId, sourceName(source.path), source.found));
     else
         watcher->setFuture(QtConcurrent::run(scanFolder, source.path, source.external, source.driveId,
                                              sourceName(source.path), source.found));
+}
+
+void VideoLibrary::onVideosFound(const QString &path, const QList<VideoInfo> &found)
+{
+    const int source = sourceIndex(path);
+    if (source < 0 || found.isEmpty())
+        return;   // unplugged (or taken out of the library) meanwhile
+    // Each takes the place of the one known from before (the last scan, or a phone's list
+    // from last time), if there was one.
+    QList<VideoInfo> &videos = m_scanned[path];
+    QHash<QString, qsizetype> at;
+    at.reserve(videos.size());
+    for (qsizetype i = 0; i < videos.size(); ++i)
+        at.insert(videos[i].path, i);
+    bool added = false;
+    bool located = false;
+    for (const VideoInfo &v : found) {
+        const auto it = at.constFind(v.path);
+        if (it != at.cend()) {
+            videos[*it] = v;
+            // What's listed only needs to know where it is on the phone now.
+            const int index = m_byPath.value(v.path, -1);
+            if (index >= 0 && m_videos[index].phone && m_videos[index].objectId != v.objectId) {
+                m_videos[index].objectId = v.objectId;
+                located = true;
+            }
+        } else {
+            videos.append(v);
+            added = true;
+        }
+    }
+    if (added) {
+        m_unsorted.insert(path);   // sorted once, when they're listed
+        scheduleRebuild();   // lists them, and queues their thumbnails
+        if (m_sources[source].external)
+            emit drivesChanged();
+    } else if (located) {
+        queueThumbnails();   // a phone's remembered videos, found again, can have theirs made now
+    }
 }
 
 int VideoLibrary::videosFound() const
@@ -560,7 +774,10 @@ void VideoLibrary::onScanFinished(const QString &path, QList<VideoInfo> videos)
     const int index = sourceIndex(path);
     if (index >= 0) {   // not removed while it was being scanned
         const int found = videos.size();
+        if (m_sources[index].phone)
+            savePhoneList(m_dataDir, m_sources[index].driveId, videos);
         m_scanned.insert(path, std::move(videos));
+        m_unsorted.remove(path);
         m_sources[index].scanning = false;
         rebuild();
         VideoSource &source = m_sources[index];
@@ -589,6 +806,30 @@ void VideoLibrary::onScanFinished(const QString &path, QList<VideoInfo> videos)
     }
 }
 
+void VideoLibrary::updateWatchedFolders()
+{
+    // Not on a drive that gets unplugged: watching it would keep it from being ejected
+    // (and it's scanned again when it's plugged back in anyway).
+    const QList<DriveInfo> drives = m_driveWatcher ? m_driveWatcher->drives() : QList<DriveInfo>();
+    QStringList folders;
+    for (const VideoSource &source : std::as_const(m_sources)) {
+        if (source.external || !QFileInfo(source.path).isDir())
+            continue;
+        const bool removable = std::any_of(drives.begin(), drives.end(), [&](const DriveInfo &drive) {
+            return withSlash(source.path).startsWith(drive.rootPath, Qt::CaseInsensitive);
+        });
+        if (!removable)
+            folders.append(source.path);
+    }
+    m_folderWatcher->setFolders(folders);
+}
+
+void VideoLibrary::onFolderChanged(const QString &folder)
+{
+    m_changedFolders.insert(folder);
+    m_changeTimer.start();   // (again): two seconds after the last change
+}
+
 void VideoLibrary::onDrivesChanged()
 {
     const QList<DriveInfo> drives = m_driveWatcher->drives();
@@ -604,7 +845,7 @@ void VideoLibrary::onDrivesChanged()
         if (present)
             continue;
         const QString path = source.path;
-        emit driveRemoved(path, source.name);   // while its videos are still known, so progress can be saved
+        emit driveRemoved(path, source.name, m_ejected.remove(path));   // while its videos are still known, so progress can be saved
         m_sources.removeAt(i);
         m_scanned.remove(path);
         removed = true;
@@ -635,6 +876,28 @@ void VideoLibrary::onDrivesChanged()
     if (removed)
         rebuild();
     emit drivesChanged();
+}
+
+void VideoLibrary::ejectDrive(const QString &path)
+{
+    const int index = sourceIndex(path);
+    if (index < 0 || !m_sources[index].external || m_sources[index].phone)
+        return;
+    const QString name = m_sources[index].name;
+    const QString kind = m_sources[index].kind;
+    // Marked first: once ejected, the drive watcher may see it go before we hear back.
+    m_ejected.insert(path);
+    auto *watcher = new QFutureWatcher<QString>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, path, name] {
+        watcher->deleteLater();
+        const QString error = watcher->result();
+        if (!error.isEmpty()) {
+            m_ejected.remove(path);
+            emit driveEjectFailed(path, name, error);
+        }
+        // Otherwise it leaves on the drive watcher's next look, a moment from now, as "ejected".
+    });
+    watcher->setFuture(QtConcurrent::run(&::ejectDrive, path, kind));
 }
 
 QString VideoLibrary::addLibraryFolder(const QString &input, int at)
@@ -689,10 +952,29 @@ int VideoLibrary::removeLibraryFolder(const QString &path)
     return index;   // library folders come first, so this is also their position
 }
 
+void VideoLibrary::scheduleRebuild()
+{
+    constexpr qint64 interval = 2000;   // ms
+    if (m_rebuildTimer.isActive())
+        return;   // these will be in it
+    const qint64 since = m_sinceRebuild.isValid() ? m_sinceRebuild.elapsed() : interval;
+    if (since >= interval)
+        rebuild();   // the first batch in a while shows straight away
+    else
+        m_rebuildTimer.start(int(interval - since));
+}
+
 void VideoLibrary::rebuild()
 {
     QElapsedTimer timer;
     timer.start();
+    m_rebuildTimer.stop();   // this is it
+    m_sinceRebuild.start();
+    for (const QString &path : std::exchange(m_unsorted, {})) {
+        const auto it = m_scanned.find(path);
+        if (it != m_scanned.end())
+            *it = sortedByPath(std::move(*it));
+    }
     m_videos.clear();
     m_byPath.clear();
     for (const VideoSource &source : std::as_const(m_sources)) {
@@ -766,12 +1048,22 @@ void VideoLibrary::queueThumbnails()
     for (int i = 0; i < m_videos.size(); ++i)
         order.append(i);
 
+    // While a phone is being scanned, its videos get thumbnails as the scan finds them (the
+    // phone takes turns between the two). Ones remembered from last time wait until the scan
+    // finds them again: until then where they are on the phone isn't known.
+    QSet<QString> scanningPhones;
+    for (const VideoSource &source : std::as_const(m_sources))
+        if (source.phone && source.scanning)
+            scanningPhones.insert(source.path);
+
     QList<bool> queued(m_videos.size(), false);
     QSet<QString> pending;
     for (int i : order) {
         if (std::exchange(queued[i], true))
             continue;
         const VideoInfo &v = m_videos[i];
+        if (v.phone && v.objectId.isEmpty() && scanningPhones.contains(v.root))
+            continue;
         const VideoMeta meta = m_metadata.value(v.cacheKey);
         // Looked at again when the cache is from before sizes were kept.
         if (!meta.probed || (meta.thumb && !v.hasThumbnail)) {
@@ -791,6 +1083,15 @@ void VideoLibrary::queueThumbnails()
         m_thumbBatch.clear();
     emit progressChanged();
     emit thumbnailsQueued();
+}
+
+void VideoLibrary::setPhonePlaying(bool playing)
+{
+    if (m_phonePlaying == playing)
+        return;
+    m_phonePlaying = playing;
+    m_thumbnailer->setPhoneHeld(playing);
+    emit phonePlayingChanged();
 }
 
 void VideoLibrary::prioritize(const QString &folder)
@@ -849,6 +1150,7 @@ void VideoLibrary::onThumbnailFinished(const QString &path, bool ok, double dura
 void VideoLibrary::refreshContinueWatching()
 {
     m_continueWatching->refresh();
+    m_historyModel->refresh();
     for (const auto &model : std::as_const(m_driveContinueModels))
         if (model)
             model->refresh();
@@ -877,6 +1179,33 @@ void VideoLibrary::reshuffleQuickPicks()
 VideoModel *VideoLibrary::videosIn(const QString &folder)
 {
     auto *model = new VideoModel(this, [this, folder] { return indexesIn(folder); });
+    m_folderVideoModels.removeAll(nullptr);
+    m_folderVideoModels.append(model);
+    return model;   // owned by QML (no parent)
+}
+
+QStringList VideoLibrary::videoPathsIn(const QString &folder) const
+{
+    // The library's videos are in path order within each source, so a folder's tree is in order.
+    const QString prefix = withSlash(folder);
+    QStringList paths;
+    for (const VideoInfo &v : m_videos) {
+        const bool here = folder.isEmpty() ? !v.external : v.dir == folder || v.dir.startsWith(prefix);
+        if (here)
+            paths.append(v.path);
+    }
+    return paths;
+}
+
+VideoModel *VideoLibrary::videosAt(const QStringList &paths)
+{
+    auto *model = new VideoModel(this, [this, paths] {
+        QList<int> rows;
+        for (const QString &path : paths)
+            if (const int index = m_byPath.value(path, -1); index >= 0)
+                rows.append(index);
+        return rows;
+    });
     m_folderVideoModels.removeAll(nullptr);
     m_folderVideoModels.append(model);
     return model;   // owned by QML (no parent)
@@ -987,8 +1316,13 @@ QVariantMap VideoLibrary::detailsOf(const QString &path) const
             {"inLibrary", true},
             {"external", true},
             {"phone", true},
+            {"watched", v.finished},
+            {"inHistory", v.watchedAt > 0},
             {"folder", v.dir},
             {"folderLabel", locationOf(v)},
+            {"phoneFolder", (QStringList{sourceName(v.root)}
+                             + v.dir.mid(v.root.size()).split(QLatin1Char('/'), Qt::SkipEmptyParts))
+                                .join(QStringLiteral(" › "))},
             {"fileName", v.path.section(QLatin1Char('/'), -1)},
             {"sizeText", locale.formattedDataSize(v.size, 1, QLocale::DataSizeTraditionalFormat)},
             {"addedText", QString()},
@@ -1001,6 +1335,9 @@ QVariantMap VideoLibrary::detailsOf(const QString &path) const
     return {
         {"title", titleOf(path)},
         {"inLibrary", index >= 0},
+        {"canManage", canManage(path)},
+        {"watched", index >= 0 && m_videos[index].finished},
+        {"inHistory", index >= 0 && m_videos[index].watchedAt > 0},
         {"external", index >= 0 && m_videos[index].external},
         {"folder", file.absolutePath()},
         {"folderLabel", index >= 0 ? locationOf(m_videos[index]) : QDir::toNativeSeparators(file.absolutePath())},
@@ -1043,8 +1380,7 @@ QString VideoLibrary::previousInFolder(const QString &path) const
 
 QStringList VideoLibrary::subtitlesFor(const QString &path) const
 {
-    static const QStringList patterns{QStringLiteral("*.srt"), QStringLiteral("*.ass"),
-                                      QStringLiteral("*.ssa"), QStringLiteral("*.vtt")};
+    static const QStringList patterns = VideoFormats::subtitlePatterns();
     if (isPhone(path))
         return {};   // not looked for on phones (yet)
     const QFileInfo video(path);
@@ -1114,10 +1450,344 @@ void VideoLibrary::setSubtitleChoice(const QString &path, const QString &subtitl
     scheduleSave();
 }
 
-void VideoLibrary::showInFileManager(const QString &path) const
+QString VideoLibrary::videoNameFilter() const
 {
-    if (isPhone(path))
+    return VideoFormats::nameFilter();
+}
+
+QString VideoLibrary::subtitleNameFilter() const
+{
+    return VideoFormats::subtitlePatterns().join(QLatin1Char(' '));
+}
+
+bool VideoLibrary::isSubtitleFile(const QString &path) const
+{
+    return VideoFormats::isSubtitleSuffix(QFileInfo(path).suffix());
+}
+
+// --- Managing files -----------------------------------------------------------------
+
+namespace {
+
+// Subtitle files that go with a video because they're named after it: "Movie.srt",
+// "Movie.en.srt" for "Movie.mkv". They're renamed and moved along with it. One named
+// after another video there with a longer name ("Movie.Extended.srt", when there's a
+// "Movie.Extended.mkv") is that one's. A VobSub's .idx goes with its .sub.
+QStringList sidecarSubtitles(const QFileInfo &video)
+{
+    const QString base = video.completeBaseName();
+    const auto namedAfter = [](const QString &name, const QString &videoBase) {
+        return name.compare(videoBase, Qt::CaseInsensitive) == 0
+            || name.startsWith(videoBase + QLatin1Char('.'), Qt::CaseInsensitive);
+    };
+    const QFileInfoList files = video.dir().entryInfoList(QDir::Files);
+    QStringList otherVideos;   // their base names, longer than this one's
+    for (const QFileInfo &file : files)
+        if (file.completeBaseName().size() > base.size() && VideoFormats::isVideoSuffix(file.suffix()))
+            otherVideos.append(file.completeBaseName());
+
+    QStringList found;
+    for (const QFileInfo &file : files) {
+        const QString suffix = file.suffix();
+        if (!VideoFormats::isSubtitleSuffix(suffix) && suffix.compare(QLatin1String("idx"), Qt::CaseInsensitive) != 0)
+            continue;
+        const QString name = file.completeBaseName();
+        if (!namedAfter(name, base))
+            continue;
+        if (std::any_of(otherVideos.cbegin(), otherVideos.cend(), [&](const QString &other) { return namedAfter(name, other); }))
+            continue;
+        found.append(file.absoluteFilePath());
+    }
+    return found;
+}
+
+// What a sidecar is called once its video is `newBase` in `newDir`: "Movie.en.srt" for
+// "Movie.mkv" becomes "Film.en.srt" for "Film.mkv".
+QString sidecarTarget(const QString &sidecar, const QString &oldBase, const QString &newDir, const QString &newBase)
+{
+    const QString name = QFileInfo(sidecar).fileName();
+    return newDir + QLatin1Char('/') + newBase + name.mid(oldBase.size());
+}
+
+} // namespace
+
+bool VideoLibrary::canManage(const QString &path) const
+{
+    return !path.isEmpty() && !isPhone(path) && QFileInfo(path).isFile();
+}
+
+QVariantMap VideoLibrary::renameVideo(const QString &path, const QString &name)
+{
+    if (!canManage(path))
+        return {{"error", tr("This video can't be renamed here.")}};
+    const QFileInfo old(path);
+    QString wanted = name.trimmed();
+    static const QRegularExpression invalid(QStringLiteral(R"([<>:"/\\|?*\x00-\x1F])"));
+    if (wanted.isEmpty() || wanted == QLatin1String(".") || wanted == QLatin1String(".."))
+        return {{"error", tr("Type a name for the file.")}};
+    if (wanted.contains(invalid))
+        return {{"error", tr("A file name can't contain any of these: < > : \" / \\ | ? *")}};
+    // The extension stays unless another video extension was typed.
+    if (!VideoFormats::isVideoSuffix(QFileInfo(wanted).suffix()))
+        wanted += QLatin1Char('.') + old.suffix();
+    const QString target = old.absolutePath() + QLatin1Char('/') + wanted;
+    if (target == old.absoluteFilePath())
+        return {{"path", path}};
+    // A change of case only ("movie.mp4" to "Movie.mp4") is the same file on Windows.
+    if (QFileInfo::exists(target) && target.compare(old.absoluteFilePath(), Qt::CaseInsensitive) != 0)
+        return {{"error", tr("There's already a file called %1 in this folder.").arg(wanted)}};
+
+    const QStringList sidecars = sidecarSubtitles(old);
+    if (!QFile::rename(old.absoluteFilePath(), target))
+        return {{"error", tr("Couldn't rename it. Is it open in another program?")}};
+    const QString newBase = QFileInfo(target).completeBaseName();
+    for (const QString &sidecar : sidecars)
+        QFile::rename(sidecar, sidecarTarget(sidecar, old.completeBaseName(), old.absolutePath(), newBase));
+    relocate(path, target);
+    return {{"path", target}};
+}
+
+void VideoLibrary::moveVideo(const QString &path, const QString &folder)
+{
+    if (!canManage(path)) {
+        emit videoMoved(path, QString(), tr("This video can't be moved here."));
         return;
+    }
+    const QFileInfo old(path);
+    const QString target = QDir::cleanPath(folder) + QLatin1Char('/') + old.fileName();
+    if (QFileInfo(target).absoluteFilePath() == old.absoluteFilePath()) {
+        emit videoMoved(path, path, QString());
+        return;
+    }
+    if (QFileInfo::exists(target)) {
+        emit videoMoved(path, QString(), tr("There's already a file called %1 there.").arg(old.fileName()));
+        return;
+    }
+    // To another drive it's copied, which can take a minute for a film: in the background.
+    const QStringList sidecars = sidecarSubtitles(old);
+    auto *watcher = new QFutureWatcher<bool>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, path, target] {
+        watcher->deleteLater();
+        if (!watcher->result()) {
+            emit videoMoved(path, QString(), tr("Couldn't move it. Is it open in another program?"));
+            return;
+        }
+        relocate(path, target);
+        emit videoMoved(path, target, QString());
+    });
+    watcher->setFuture(QtConcurrent::run([old, target, sidecars] {
+        if (!QFile::rename(old.absoluteFilePath(), target))
+            return false;
+        const QString dir = QFileInfo(target).absolutePath();
+        for (const QString &sidecar : sidecars)
+            QFile::rename(sidecar, sidecarTarget(sidecar, old.completeBaseName(), dir, old.completeBaseName()));
+        return true;
+    }));
+}
+
+QString VideoLibrary::deleteVideo(const QString &path)
+{
+    if (!canManage(path))
+        return tr("This video can't be deleted here.");
+    const int index = m_byPath.value(path, -1);
+    if (!QFile::moveToTrash(path))
+        return tr("Couldn't move it to the Recycle Bin. Is it open in another program?");
+    if (index >= 0) {
+        const VideoInfo v = m_videos[index];
+        forgetScanned(path);
+        m_history.remove(v.key);
+        scheduleSave();
+        rebuild();
+    }
+    return {};
+}
+
+void VideoLibrary::forgetScanned(const QString &path)
+{
+    for (QList<VideoInfo> &list : m_scanned)
+        list.removeIf([&](const VideoInfo &entry) { return entry.path == path; });
+}
+
+void VideoLibrary::relocate(const QString &oldPath, const QString &newPath)
+{
+    const int index = m_byPath.value(oldPath, -1);
+    if (index < 0)
+        return;   // not in the library: nothing to update
+    const VideoInfo old = m_videos[index];
+    forgetScanned(oldPath);
+
+    // Where it is now: a library folder (first, as in rebuild()) or a drive, if any.
+    QString newKey = newPath;
+    QString newCacheKey;
+    for (const VideoSource &source : std::as_const(m_sources)) {
+        if (source.phone || !newPath.startsWith(withSlash(source.path)))
+            continue;
+        const QFileInfo file(newPath);
+        const VideoInfo moved = fileVideo(file, source.path, source.external, source.driveId,
+                                          placeKeyOf(file.absolutePath(), source.path, sourceName(source.path)));
+        newKey = moved.key;
+        newCacheKey = moved.cacheKey;
+        QList<VideoInfo> &list = m_scanned[source.path];
+        list.append(moved);
+        list = sortedByPath(std::move(list));
+        break;
+    }
+
+    // Its history (progress, subtitle and audio choices) goes with it.
+    if (newKey != old.key && m_history.contains(old.key)) {
+        QJsonObject entry = m_history.take(old.key).toObject();
+        // A subtitle file named after it was renamed or moved with it.
+        const QString subtitle = entry.value(QStringLiteral("subtitle")).toString();
+        if (!subtitle.isEmpty() && !QFileInfo::exists(subtitle)) {
+            const QFileInfo was(old.path), now(newPath);
+            const QString followed = sidecarTarget(subtitle, was.completeBaseName(), now.absolutePath(), now.completeBaseName());
+            if (QFileInfo::exists(followed))
+                entry.insert(QStringLiteral("subtitle"), followed);
+        }
+        m_history.insert(newKey, entry);
+    }
+    // And its thumbnail and details, so they needn't be made again.
+    if (!newCacheKey.isEmpty() && newCacheKey != old.cacheKey) {
+        if (m_metadata.contains(old.cacheKey)) {
+            m_metadata.insert(newCacheKey, m_metadata.take(old.cacheKey));
+            m_metadataChanged = true;
+        }
+        if (m_thumbFiles.remove(old.cacheKey)) {
+            VideoInfo probe;
+            probe.cacheKey = old.cacheKey;
+            const QString from = thumbnailFile(probe);
+            probe.cacheKey = newCacheKey;
+            if (QFile::rename(from, thumbnailFile(probe)))
+                m_thumbFiles.insert(newCacheKey);
+        }
+    }
+    scheduleSave();
+    rebuild();
+}
+
+// --- Watch history ----------------------------------------------------------------------
+
+void VideoLibrary::editHistory(const QString &path, const std::function<void(QJsonObject &)> &change)
+{
+    const QString key = keyFor(path);
+    QJsonObject entry = m_history.value(key).toObject();
+    change(entry);
+    if (entry.isEmpty())
+        m_history.remove(key);
+    else
+        m_history.insert(key, entry);
+    scheduleSave();
+
+    const int index = m_byPath.value(path, -1);
+    if (index < 0)
+        return;
+    VideoInfo &v = m_videos[index];
+    v.position = entry.value(QStringLiteral("position")).toDouble();
+    v.watchedAt = entry.value(QStringLiteral("watchedAt")).toInteger();
+    v.finished = entry.value(QStringLiteral("finished")).toBool();
+    emit videoChanged(index);
+    refreshContinueWatching();
+}
+
+void VideoLibrary::setWatched(const QString &path, bool watched)
+{
+    const int index = m_byPath.value(path, -1);
+    const double duration = index >= 0 ? m_videos[index].duration : 0;
+    editHistory(path, [&](QJsonObject &entry) {
+        if (watched) {
+            entry.insert(QStringLiteral("position"), 0);
+            entry.insert(QStringLiteral("finished"), true);
+            entry.insert(QStringLiteral("watchedAt"), QDateTime::currentMSecsSinceEpoch());
+            if (duration > 0)
+                entry.insert(QStringLiteral("duration"), duration);
+        } else {
+            for (const char *field : {"position", "finished", "watchedAt", "duration"})
+                entry.remove(QLatin1String(field));
+        }
+    });
+}
+
+void VideoLibrary::clearHistory()
+{
+    for (auto it = m_history.begin(); it != m_history.end();) {
+        QJsonObject entry = it.value().toObject();
+        for (const char *field : {"position", "finished", "watchedAt", "duration"})
+            entry.remove(QLatin1String(field));
+        if (entry.isEmpty()) {
+            it = m_history.erase(it);
+        } else {
+            *it = entry;
+            ++it;
+        }
+    }
+    scheduleSave();
+    for (int i = 0; i < m_videos.size(); ++i) {
+        VideoInfo &v = m_videos[i];
+        if (v.watchedAt == 0)
+            continue;
+        v.position = 0;
+        v.watchedAt = 0;
+        v.finished = false;
+        emit videoChanged(i);
+    }
+    refreshContinueWatching();
+}
+
+QVariantMap VideoLibrary::historyEntry(const QString &path) const
+{
+    const QJsonObject entry = m_history.value(keyFor(path)).toObject();
+    QVariantMap saved;
+    for (const char *field : {"position", "finished", "watchedAt", "duration"}) {
+        const QString name = QLatin1String(field);
+        if (entry.contains(name))
+            saved.insert(name, entry.value(name).toVariant());
+    }
+    return saved;
+}
+
+void VideoLibrary::restoreHistory(const QString &path, const QVariantMap &saved)
+{
+    editHistory(path, [&](QJsonObject &entry) {
+        for (const char *field : {"position", "finished", "watchedAt", "duration"})
+            entry.remove(QLatin1String(field));
+        for (auto it = saved.begin(); it != saved.end(); ++it)
+            entry.insert(it.key(), QJsonValue::fromVariant(it.value()));
+    });
+}
+
+int VideoLibrary::audioChoice(const QString &path) const
+{
+    return m_history.value(keyFor(path)).toObject().value(QStringLiteral("audio")).toInt();
+}
+
+void VideoLibrary::setAudioChoice(const QString &path, int track)
+{
+    if (path.isEmpty())
+        return;
+    const QString key = keyFor(path);
+    QJsonObject entry = m_history.value(key).toObject();
+    entry.insert(QStringLiteral("audio"), track);
+    m_history.insert(key, entry);
+    scheduleSave();
+}
+
+void VideoLibrary::showInFileManager(const QString &path)
+{
+    if (isPhone(path)) {
+        const int index = m_byPath.value(path, -1);
+        if (index < 0)
+            return;
+        const VideoInfo &v = m_videos[index];
+        const QString serial = v.root.mid(6);   // the root is "mtp://<serial>"
+        const QString inside = v.path.mid(v.root.size() + 1);
+        auto *watcher = new QFutureWatcher<bool>(this);
+        connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, path] {
+            watcher->deleteLater();
+            emit phoneFileShown(path, watcher->result());
+        });
+        watcher->setFuture(QtConcurrent::run(&Phones::showInExplorer, serial, v.objectId, inside));
+        return;
+    }
 #ifdef Q_OS_WIN
     // Explorer's own "open folder and select" call; copes with any characters in the path.
     const std::wstring native = QDir::toNativeSeparators(path).toStdWString();

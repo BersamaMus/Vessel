@@ -1,7 +1,8 @@
 import QtQuick
 
-// A sideways-scrolling row (or several rows) of cards. On desktop it pages
-// with arrow buttons so the mouse wheel keeps scrolling the page.
+// A sideways-scrolling row (or several rows) of cards. Drag it (click and swipe), turn the
+// wheel with Shift held, or page with the arrow buttons; the plain wheel keeps scrolling the
+// page, since a sideways-only Flickable passes up-and-down wheel turns on to its parent.
 Item {
     id: shelf
 
@@ -22,6 +23,7 @@ Item {
         readonly property real maxX: Math.max(minX, originX + contentWidth + rightMargin - width)
 
         function page(direction) {
+            cancelFlick();
             const visibleCells = Math.max(1, Math.floor((width - leftMargin - rightMargin) / cellWidth));
             contentX = Math.max(minX, Math.min(maxX, contentX + direction * visibleCells * cellWidth));
         }
@@ -34,11 +36,18 @@ Item {
         leftMargin: Theme.pagePadding
         rightMargin: Theme.pagePadding
         clip: true
+        flickableDirection: Flickable.HorizontalFlick
         boundsBehavior: Flickable.StopAtBounds
-        interactive: Qt.platform.os === "android" || Qt.platform.os === "ios"
 
+        SmoothWheel {
+            flickable: grid
+            horizontal: true
+            acceptedModifiers: Qt.ShiftModifier
+        }
+
+        // Only the arrows' jumps animate: dragging and flicking move the view without
+        // writing contentX, and the wheel's glide is an animation, which Behaviors skip.
         Behavior on contentX {
-            enabled: !grid.interactive
             NumberAnimation { duration: 350; easing.type: Easing.OutCubic }
         }
     }
@@ -54,8 +63,8 @@ Item {
         visible: opacity > 0
         background: Rectangle {
             radius: 20
-            color: parent.pressed ? "#3A3A3A" : "#E62A2A2A"
-            border.color: "#26FFFFFF"
+            color: parent.pressed ? Theme.controlHover : "#E62A2A2A"
+            border.color: Theme.border
         }
         Behavior on opacity { NumberAnimation { duration: 150 } }
     }
