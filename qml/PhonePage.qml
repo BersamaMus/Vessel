@@ -13,46 +13,29 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-        scrolled: page.contentItem.contentY > 1
+        scrolled: page.contentY > 1
 
         RowLayout {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.pagePadding
-            Layout.rightMargin: Theme.pagePadding
+            Layout.rightMargin: Theme.pagePadding - 8
             Layout.topMargin: 14
             spacing: 8
 
-            ColumnLayout {
-                Layout.fillWidth: true
-                spacing: 2
-
-                Text {
-                    Layout.fillWidth: true   // lets the column grow, putting search at the far right
-                    text: qsTr("Smartphone")
-                    color: Theme.textPrimary
-                    font.pixelSize: 26
-                    font.weight: Font.ExtraBold
-                    font.letterSpacing: -0.5
-                }
-                Text {
-                    text: qsTr("Phones connected with a USB cable")
-                    color: Theme.textSecondary
-                    font.pixelSize: 14
-                }
+            PageTitle {
+                title: qsTr("Phone")
+                subtitle: qsTr("Phones connected with a USB cable")
             }
 
-            // Searches every connected phone.
-            IconButton {
-                Layout.alignment: Qt.AlignTop
-                visible: VideoLibrary.phones.some(phone => phone.ready)
-                iconName: "search"
-                tip: qsTr("Search your phones (Ctrl+F)")
-                onClicked: page.app.openSearch()
+            // Search looks through every connected phone.
+            AppActions {
+                searchVisible: VideoLibrary.phones.some(phone => phone.ready)
+                searchTip: qsTr("Search your phones (Ctrl+F)")
             }
         }
     }
 
-    ScrollView {
+    PageScroll {
         id: page
 
         readonly property var app: ApplicationWindow.window
@@ -61,8 +44,6 @@ Item {
         anchors.right: parent.right
         anchors.top: bar.bottom
         anchors.bottom: parent.bottom
-        contentWidth: availableWidth
-        clip: true
 
         component PhoneCard: AbstractButton {
             id: card
@@ -78,11 +59,16 @@ Item {
             onClicked: page.app.openFolder(modelData.path)
 
             HoverHandler { cursorShape: card.ready ? Qt.PointingHandCursor : Qt.ArrowCursor }
+            TapHandler {
+                acceptedButtons: Qt.RightButton
+                enabled: card.ready
+                onTapped: page.app.showFolderMenu(card.modelData.path)
+            }
 
             background: Rectangle {
                 radius: Theme.radiusCard
-                color: card.pressed ? "#262626" : card.hovered && card.ready ? Theme.surfaceHigh : Theme.surface
-                border.color: "#1FFFFFFF"
+                color: card.pressed ? Theme.surfacePressed : card.hovered && card.ready ? Theme.surfaceHigh : Theme.surface
+                border.color: Theme.borderSoft
             }
 
             contentItem: RowLayout {
@@ -119,7 +105,9 @@ Item {
                     Text {
                         visible: !card.ready
                         Layout.fillWidth: true
-                        text: qsTr("Unlock your phone, then choose File transfer in the USB notification (Android) or tap Trust (iPhone).")
+                        text: qsTr("Unlock your phone, then:
+On Android, choose File transfer in the USB notification.
+On an iPhone, tap Allow (or Trust).")
                         color: Theme.textSecondary
                         font.pixelSize: 13
                         wrapMode: Text.Wrap
@@ -149,7 +137,7 @@ Item {
                         Layout.topMargin: 6
                         implicitHeight: 6
                         radius: 3
-                        color: "#33FFFFFF"
+                        color: Theme.borderStrong
                         Rectangle {
                             width: parent.width * card.modelData.usedFraction
                             height: parent.height
@@ -175,7 +163,7 @@ Item {
                 visible: VideoLibrary.phones.length === 0
                 Layout.topMargin: 12
                 iconName: "smartphone"
-                text: qsTr("Connect your phone with a USB cable and unlock it. On Android, choose File transfer in the USB notification; on an iPhone, tap Trust. Its videos will show up here.")
+                text: qsTr("Connect your phone with a USB cable and unlock it, and its videos will show up here.\nOn Android, choose File transfer in the USB notification.\nOn an iPhone, tap Allow (or Trust).")
             }
 
             Flow {

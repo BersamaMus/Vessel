@@ -34,6 +34,10 @@ public:
     void request(const QString &videoPath, const QString &outputFile, const QString &source = {});
     // Drops queued requests (running ones still finish).
     void clear();
+    // While a phone's video is playing, its thumbnails wait: the phone answers one request
+    // at a time, and playback shouldn't have to queue behind them. A grab already under way
+    // finishes.
+    void setPhoneHeld(bool held);
 
     // The worker process's main loop (see main.cpp); returns its exit code.
     static int runWorker();
@@ -80,6 +84,7 @@ private:
     bool m_workersFailed = false;   // couldn't start one: grab in this process instead
     bool m_dispatchPending = false;
     bool m_phoneInProcess = false;   // the fallback is grabbing from a phone
+    bool m_phoneHeld = false;        // see setPhoneHeld
     QTimer m_watchdog;
 
     // The in-process fallback.

@@ -8,13 +8,16 @@ MenuItem {
     leftPadding: 16
     rightPadding: 16
     implicitHeight: 40
+    // Leaves room for a tick even when it can't have one, to line up with checkable items.
+    property bool reserveCheck: false
+
     indicator: null   // the tick is drawn below
 
     contentItem: Row {
         spacing: 10
 
         Item {
-            visible: item.checkable
+            visible: item.checkable || item.reserveCheck
             anchors.verticalCenter: parent.verticalCenter
             width: 20
             height: 20

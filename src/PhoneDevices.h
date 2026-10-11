@@ -31,7 +31,7 @@ struct Phone
 
 struct File
 {
-    QString objectId;     // valid while it stays connected
+    QString objectId;     // valid while it stays connected; "" for one remembered from before
     QString path;         // inside the phone: "DCIM/Camera/VID_20220102_141629.mp4"
     qint64 size = 0;
     QDateTime modified;
@@ -40,12 +40,21 @@ struct File
 // The connected phones (not USB drives, which also show up in WPD).
 QList<Phone> list();
 
-// Every video on the phone, skipping hidden folders and apps' private data. `found` is
-// called for each as it's found (for progress); returning false stops the search.
-QList<File> findVideos(const QString &serial, const std::function<bool(const File &)> &found);
+// Every video on the phone, skipping hidden folders, apps' private data and WhatsApp's
+// photos and voice notes. The camera's folder and the like are looked in first. `found` is
+// called after each folder with the videos in it (often none), so they can be shown as
+// they're found; returning false stops the search.
+QList<File> findVideos(const QString &serial, const std::function<bool(const QList<File> &)> &found);
 
-// What libmpv opens to play a video on a phone, and the protocol that serves it.
+// What libmpv opens to play a video on a phone, and the protocol that serves it. Without
+// an object id, the video is looked for by its path when it's opened.
 QString streamUrl(const QString &serial, const File &file);
 void registerStream(mpv_handle *mpv);
+
+// Opens the folder a phone's file is in, in File Explorer (This PC > phone > storage > …),
+// with the file selected; false if it couldn't be found there. The file is found by its
+// object id, or by its path inside the phone when the id isn't known. Blocks for up to a
+// few seconds in a folder of thousands of files.
+bool showInExplorer(const QString &serial, const QString &objectId, const QString &path);
 
 } // namespace Phones

@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 
-// A section title with optional extra buttons and a yellow action on the right.
+// A section title with optional extra buttons and a purple action on the right.
 RowLayout {
     id: header
 
@@ -23,7 +23,7 @@ RowLayout {
         Layout.fillWidth: true
         text: header.title
         color: Theme.textPrimary
-        font.pixelSize: 22
+        font.pixelSize: Theme.sectionSize
         font.weight: Font.Bold
         font.letterSpacing: -0.2
         elide: Text.ElideRight

@@ -18,8 +18,11 @@ class MpvItem : public QQuickFramebufferObject
     Q_PROPERTY(double duration READ duration NOTIFY durationChanged)
     Q_PROPERTY(bool paused READ paused WRITE setPaused NOTIFY pausedChanged)
     Q_PROPERTY(bool ended READ ended NOTIFY endedChanged)
+    // Percent, 0 to 200: past 100 the sound is amplified.
     Q_PROPERTY(double volume READ volume WRITE setVolume NOTIFY volumeChanged)
     Q_PROPERTY(bool muted READ muted WRITE setMuted NOTIFY mutedChanged)
+    // Playback speed: 1 is normal, 2 twice as fast (the pitch stays the same).
+    Q_PROPERTY(double speed READ speed WRITE setSpeed NOTIFY speedChanged)
     Q_PROPERTY(QString title READ title NOTIFY titleChanged)
     Q_PROPERTY(bool loaded READ loaded NOTIFY loadedChanged)
     Q_PROPERTY(int videoWidth READ videoWidth NOTIFY videoInfoChanged)
@@ -34,6 +37,9 @@ class MpvItem : public QQuickFramebufferObject
     // Subtitle tracks: {id, label, external, file, selected}; subtitleId is the shown one, 0 for none.
     Q_PROPERTY(QVariantList subtitleTracks READ subtitleTracks NOTIFY tracksChanged)
     Q_PROPERTY(int subtitleId READ subtitleId NOTIFY tracksChanged)
+    // Audio tracks: {id, label, selected}; audioId is the one playing, 0 for none.
+    Q_PROPERTY(QVariantList audioTracks READ audioTracks NOTIFY tracksChanged)
+    Q_PROPERTY(int audioId READ audioId NOTIFY tracksChanged)
 
 public:
     explicit MpvItem(QQuickItem *parent = nullptr);
@@ -47,6 +53,7 @@ public:
     bool ended() const { return m_ended; }
     double volume() const { return m_volume; }
     bool muted() const { return m_muted; }
+    double speed() const { return m_speed; }
     QString title() const { return m_title; }
     bool loaded() const { return m_loaded; }
     int videoWidth() const { return m_videoWidth; }
@@ -56,14 +63,19 @@ public:
     QString mediaCreated() const { return m_mediaCreated; }
     QVariantList subtitleTracks() const { return m_subtitleTracks; }
     int subtitleId() const { return m_subtitleId; }
+    QVariantList audioTracks() const { return m_audioTracks; }
+    int audioId() const { return m_audioId; }
 
     void setPaused(bool paused);
     void setVolume(double volume);
     void setMuted(bool muted);
+    void setSpeed(double speed);
 
     // Opens a local file, optionally starting part-way through (resume). The first
-    // of `subtitles` (subtitle files to load alongside it) is shown.
-    Q_INVOKABLE void open(const QString &path, double startSeconds = 0, const QStringList &subtitles = {});
+    // of `subtitles` (subtitle files to load alongside it) is shown. `audioTrack` is the
+    // audio track to play, or 0 for the file's default.
+    Q_INVOKABLE void open(const QString &path, double startSeconds = 0, const QStringList &subtitles = {},
+                          int audioTrack = 0);
     Q_INVOKABLE void togglePause();
     // Exact seek, for clicks and when scrubbing ends.
     Q_INVOKABLE void seek(double seconds);
@@ -74,6 +86,8 @@ public:
     Q_INVOKABLE void stop();
     // Shows subtitle track `id`, or none for 0.
     Q_INVOKABLE void setSubtitleTrack(int id);
+    // Plays audio track `id`.
+    Q_INVOKABLE void setAudioTrack(int id);
     // Loads a subtitle file, and shows it unless `select` is false.
     Q_INVOKABLE void addSubtitleFile(const QString &path, bool select = true);
     // Sets any mpv property, e.g. "sub-pos".
@@ -86,6 +100,7 @@ signals:
     void endedChanged();
     void volumeChanged();
     void mutedChanged();
+    void speedChanged();
     void titleChanged();
     void loadedChanged();
     void videoInfoChanged();
@@ -99,7 +114,7 @@ private:
     void command(const QStringList &args);
     void onRendererReady();
     void onRendererGone();
-    void load(const QString &path, double startSeconds, const QStringList &subtitles);
+    void load(const QString &path, double startSeconds, const QStringList &subtitles, int audioTrack);
     void updateTracks(const QVariantList &tracks);
 
     mpv_handle *m_mpv = nullptr;
@@ -109,6 +124,9 @@ private:
     QString m_pendingPath;
     double m_pendingStart = 0;
     QStringList m_pendingSubtitles;
+    int m_pendingAudio = 0;
+    // The audio track to switch to once the file's tracks are known (0: its default).
+    int m_wantedAudio = 0;
     // Subtitle files to add once the current file has loaded.
     QStringList m_subtitlesToAdd;
     double m_position = 0;
@@ -117,6 +135,7 @@ private:
     bool m_ended = false;
     double m_volume = 100;
     bool m_muted = false;
+    double m_speed = 1;
     QString m_title;
     bool m_loaded = false;
     int m_videoWidth = 0;
@@ -126,4 +145,6 @@ private:
     QString m_mediaCreated;
     QVariantList m_subtitleTracks;
     int m_subtitleId = 0;
+    QVariantList m_audioTracks;
+    int m_audioId = 0;
 };

@@ -7,7 +7,7 @@ import QtQuick.Shapes
 Rectangle {
     id: rail
 
-    // 0 Home, 1 Library, 2 External, 3 Smartphone, 4 Settings
+    // 0 Home, 1 Library, 2 External, 3 Phone, 4 Settings
     property int currentIndex: 0
     signal tabClicked(int index)
 
@@ -90,7 +90,7 @@ Rectangle {
         Tab { tabIndex: 0; iconName: "home"; label: qsTr("Home") }
         Tab { tabIndex: 1; iconName: "library"; label: qsTr("Library") }
         Tab { tabIndex: 2; iconName: "usb"; label: qsTr("External"); badge: VideoLibrary.drives.length }
-        Tab { tabIndex: 3; iconName: "smartphone"; label: qsTr("Smartphone"); badge: VideoLibrary.phones.length }
+        Tab { tabIndex: 3; iconName: "smartphone"; label: qsTr("Phone"); badge: VideoLibrary.phones.length }
     }
 
     // Background work: a ring that fills as thumbnails are made, or spins while
@@ -128,7 +128,7 @@ Rectangle {
             preferredRendererType: Shape.CurveRenderer
 
             ShapePath {
-                strokeColor: "#33FFFFFF"
+                strokeColor: Theme.borderStrong
                 strokeWidth: 3
                 fillColor: "transparent"
                 PathAngleArc { centerX: 15; centerY: 15; radiusX: 13; radiusY: 13; startAngle: 0; sweepAngle: 360 }

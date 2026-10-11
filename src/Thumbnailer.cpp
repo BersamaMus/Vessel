@@ -225,6 +225,12 @@ void Thumbnailer::clear()
     m_queued.clear();
 }
 
+void Thumbnailer::setPhoneHeld(bool held)
+{
+    if (std::exchange(m_phoneHeld, held) && !held)
+        dispatch();   // let the phone's waiting jobs go
+}
+
 bool Thumbnailer::isPhoneJob(const Job &job)
 {
     return job.source.startsWith(QLatin1String("mtp://"));
@@ -245,7 +251,7 @@ int Thumbnailer::takeableCount() const
     int others = 0;
     for (const Job &job : m_queue) {
         if (isPhoneJob(job))
-            phoneWaiting = true;
+            phoneWaiting = !m_phoneHeld;
         else
             ++others;
     }
@@ -256,7 +262,7 @@ bool Thumbnailer::takeNext(Job &job)
 {
     const bool phoneBusy = phoneJobRunning();
     for (qsizetype i = 0; i < m_queue.size(); ++i) {
-        if (phoneBusy && isPhoneJob(m_queue[i]))
+        if ((phoneBusy || m_phoneHeld) && isPhoneJob(m_queue[i]))
             continue;
         job = m_queue.takeAt(i);
         m_queued.remove(job.video);

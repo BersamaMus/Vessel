@@ -27,7 +27,7 @@ Rectangle {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: 1
-        color: "#1FFFFFFF"
+        color: Theme.borderSoft
         opacity: bar.scrolled ? 1 : 0
         Behavior on opacity { NumberAnimation { duration: 150 } }
     }

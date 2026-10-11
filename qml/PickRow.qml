@@ -6,11 +6,15 @@ import QtQuick.Controls.Basic
 AbstractButton {
     id: row
 
+    // The video's path: right-clicking opens its menu (see Main.showVideoMenu).
+    property string path
     property string title
     property string subtitle
     property url thumbnail
     property string durationText
     property real progress: 0
+    // Finished: marked with a tick.
+    property bool watched: false
     // The thumbnail is still being made.
     property bool loading: false
     property real thumbWidth: 96
@@ -24,10 +28,15 @@ AbstractButton {
     implicitHeight: Math.max(thumb.height, details.implicitHeight) + topPadding + bottomPadding
 
     HoverHandler { cursorShape: Qt.PointingHandCursor }
+    TapHandler {
+        acceptedButtons: Qt.RightButton
+        enabled: row.path !== ""
+        onTapped: row.ApplicationWindow.window.showVideoMenu(row.path)
+    }
 
     background: Rectangle {
         radius: Theme.radiusArt
-        color: row.current ? "#1FFACC15"
+        color: row.current ? Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.12)
              : row.pressed ? Theme.pressed : row.hovered ? Theme.hover : "transparent"
     }
 
@@ -58,6 +67,24 @@ AbstractButton {
                 }
             }
 
+            // Watched (finished, or marked so): a tick in the corner.
+            Rectangle {
+                visible: row.watched && !row.current
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.margins: 5
+                width: 20
+                height: 20
+                radius: 10
+                color: Theme.badge
+                Icon {
+                    anchors.centerIn: parent
+                    name: "check"
+                    size: 14
+                    color: Theme.accent
+                }
+            }
+
             Rectangle {
                 visible: row.thumbWidth > 120 && row.durationText !== "" && !row.current
                 anchors.right: parent.right
@@ -66,7 +93,7 @@ AbstractButton {
                 width: badge.implicitWidth + 10
                 height: 20
                 radius: 5
-                color: "#CC000000"
+                color: Theme.badge
                 Text {
                     id: badge
                     anchors.centerIn: parent
@@ -85,7 +112,7 @@ AbstractButton {
                 anchors.margins: 5
                 height: 3
                 radius: 1.5
-                color: "#59FFFFFF"
+                color: Theme.track
                 Rectangle {
                     width: parent.width * row.progress
                     height: parent.height

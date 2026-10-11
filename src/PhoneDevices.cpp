@@ -1,8 +1,10 @@
 #include "PhoneDevices.h"
+#include "VideoFormats.h"
 
 #include <QDebug>
 #include <QHash>
 #include <QMutex>
+#include <QRegularExpression>
 #include <QSet>
 #include <QThread>
 #include <QUrl>
@@ -10,6 +12,7 @@
 #include <mpv/client.h>
 #include <mpv/stream_cb.h>
 
+#include <algorithm>
 #include <atomic>
 #include <memory>
 
@@ -18,6 +21,8 @@
 #include <PortableDevice.h>
 #include <PortableDeviceApi.h>
 #include <WpdMtpExtensions.h>
+#include <shlobj.h>
+#include <shlwapi.h>
 #include <wrl/client.h>
 #endif
 
@@ -25,16 +30,47 @@ namespace Phones {
 
 namespace {
 
-const QStringList kVideoExtensions = {
-    QStringLiteral("mp4"), QStringLiteral("m4v"), QStringLiteral("mkv"), QStringLiteral("mov"), QStringLiteral("webm"),
-    QStringLiteral("avi"), QStringLiteral("3gp"), QStringLiteral("ts"), QStringLiteral("mpg"), QStringLiteral("mpeg"),
-    QStringLiteral("wmv"), QStringLiteral("flv"),
-};
-
-bool isVideoName(const QString &name)
+// The library's video extensions (see VideoFormats). A phone's files can't be peeked into
+// as cheaply as a drive's, so TypeScript files ("index.ts") are told from MPEG-TS videos
+// by what the phone says they are, or else by size: code is rarely a megabyte, a video
+// nearly always more.
+bool isVideo(const QString &name, const GUID &type, qint64 size)
 {
     const qsizetype dot = name.lastIndexOf(QLatin1Char('.'));
-    return dot > 0 && kVideoExtensions.contains(name.mid(dot + 1).toLower());
+    if (dot <= 0 || !VideoFormats::isVideoSuffix(name.mid(dot + 1)))
+        return false;
+    if (name.mid(dot + 1).compare(QLatin1String("ts"), Qt::CaseInsensitive) != 0)
+        return true;
+    return type == WPD_CONTENT_TYPE_VIDEO
+        || (size >= 1024 * 1024 && !name.endsWith(QLatin1String(".d.ts"), Qt::CaseInsensitive));
+}
+
+// Folders not worth looking in. Hidden ones (trash, caches, thumbnails) and apps' private
+// data hold no videos worth listing, and can be huge. So can WhatsApp's photos, stickers
+// and voice notes, and the phone is slow to list them the first time after it's plugged
+// in (17 s for 2,700 sent photos): WhatsApp keeps them out of the phone's media index.
+// Its videos are in "WhatsApp Video" (and "WhatsApp Documents"), which are still looked in.
+bool skipFolder(const QString &name, const QString &path)
+{
+    static const QRegularExpression whatsApp(
+        QStringLiteral("^WhatsApp (Business )?(Images|Stickers|Voice Notes|Audio|Animated Gifs|Profile Photos)$"));
+    return name.startsWith(QLatin1Char('.')) || path.endsWith(QLatin1String("Android/data"))
+        || path.endsWith(QLatin1String("Android/obb")) || whatsApp.match(name).hasMatch();
+}
+
+// Which of a storage's top folders are looked in first: the camera's, then the ones
+// people put videos in, then the rest, and apps' media last.
+constexpr int kFolderRanks = 4;
+int folderRank(const QString &topFolder)
+{
+    if (topFolder.compare(QLatin1String("DCIM"), Qt::CaseInsensitive) == 0)
+        return 0;
+    for (const char *name : {"Movies", "Download", "Videos", "Pictures"})
+        if (topFolder.compare(QLatin1String(name), Qt::CaseInsensitive) == 0)
+            return 1;
+    if (topFolder.compare(QLatin1String("Android"), Qt::CaseInsensitive) == 0)
+        return 3;
+    return 2;
 }
 
 } // namespace
@@ -132,7 +168,7 @@ QSet<QString> g_notPhones;                           // USB drives and the like,
 std::shared_ptr<Device> open(IPortableDeviceManager *manager, const QString &id)
 {
     auto client = create<IPortableDeviceValues>(CLSID_PortableDeviceValues);
-    client->SetStringValue(WPD_CLIENT_NAME, L"Better Video Player");
+    client->SetStringValue(WPD_CLIENT_NAME, L"Vessel");
     // Write access is what lets MTP commands be sent (for reading parts of files); nothing is written.
     client->SetUnsignedIntegerValue(WPD_CLIENT_DESIRED_ACCESS, GENERIC_READ | GENERIC_WRITE);
     auto device = std::make_shared<Device>();
@@ -311,6 +347,43 @@ QList<ComPtr<IPortableDeviceValues>> describe(Device &device, const QStringList 
     return results;
 }
 
+// The object at a path inside the phone ("DCIM/Camera/VID_….mp4", as findVideos names
+// them), looked for a folder at a time; "" if it isn't there.
+QString objectIdAt(Device &device, const QString &path)
+{
+    QMutexLocker lock(&device.mutex);
+    QStringList parts = path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    QStringList storages;
+    if (parts.isEmpty() || !childIds(device, QString::fromWCharArray(WPD_DEVICE_OBJECT_ID), storages) || storages.isEmpty())
+        return {};
+    QString current = storages.first();
+    if (storages.size() > 1) {   // the path starts with the storage's name
+        current.clear();
+        const QString storage = parts.takeFirst();
+        for (const auto &values : describe(device, storages))
+            if (stringValue(values.Get(), WPD_OBJECT_NAME) == storage)
+                current = stringValue(values.Get(), WPD_OBJECT_ID);
+    }
+    for (const QString &part : std::as_const(parts)) {
+        if (current.isEmpty())
+            return {};
+        QStringList ids;
+        if (!childIds(device, current, ids))
+            return {};
+        current.clear();
+        for (const auto &values : describe(device, ids)) {
+            QString name = stringValue(values.Get(), WPD_OBJECT_ORIGINAL_FILE_NAME);
+            if (name.isEmpty())
+                name = stringValue(values.Get(), WPD_OBJECT_NAME);
+            if (name == part) {
+                current = stringValue(values.Get(), WPD_OBJECT_ID);
+                break;
+            }
+        }
+    }
+    return current;
+}
+
 ComPtr<IPortableDeviceValues> command(REFPROPERTYKEY key)
 {
     auto values = create<IPortableDeviceValues>(CLSID_PortableDeviceValues);
@@ -420,17 +493,28 @@ qint64 readPart(Device &device, const QString &objectId, qint64 offset, char *bu
 // The mtp:// protocol for libmpv
 // ---------------------------------------------------------------------------
 
-// A video on a phone as a stream libmpv can read and seek in, a block at a time.
+// A video on a phone as a stream libmpv can read and seek in, a block at a time. The last
+// few blocks are kept: a file whose audio and video aren't interleaved (all the video,
+// then all the audio) is read in two places at once, and with a single block each switch
+// fetched 4 MB again; such a video played at a sixth of real time.
 struct Stream
 {
     static constexpr qint64 kBlock = 4 << 20;   // a few round trips' worth: ~35 MB/s over USB
+    static constexpr int kKeptBlocks = 8;
+
+    struct Block
+    {
+        qint64 start = 0;
+        QByteArray data;
+        quint64 lastUsed = 0;
+    };
 
     std::shared_ptr<Device> device;
     QString objectId;
     qint64 size = 0;
     qint64 position = 0;
-    qint64 blockStart = -1;
-    QByteArray block;
+    QList<Block> blocks;   // the least recently used goes when another is needed
+    quint64 reads = 0;
     std::atomic_bool cancelled = false;
 };
 
@@ -442,21 +526,27 @@ int64_t streamRead(void *cookie, char *buffer, uint64_t bytes)
     if (s->position >= s->size)
         return 0;
     const qint64 start = s->position - s->position % Stream::kBlock;
-    if (start != s->blockStart) {
-        s->block.resize(qMin(Stream::kBlock, s->size - start));
-        const qint64 got = readPart(*s->device, s->objectId, start, s->block.data(), s->block.size());
-        if (got <= 0) {
-            s->blockStart = -1;
+    auto block = std::find_if(s->blocks.begin(), s->blocks.end(), [&](const Stream::Block &b) { return b.start == start; });
+    if (block == s->blocks.end()) {
+        if (s->blocks.size() >= Stream::kKeptBlocks)
+            s->blocks.erase(std::min_element(s->blocks.begin(), s->blocks.end(),
+                                             [](const Stream::Block &a, const Stream::Block &b) { return a.lastUsed < b.lastUsed; }));
+        Stream::Block fetched;
+        fetched.start = start;
+        fetched.data.resize(qMin(Stream::kBlock, s->size - start));
+        const qint64 got = readPart(*s->device, s->objectId, start, fetched.data.data(), fetched.data.size());
+        if (got <= 0)
             return -1;
-        }
-        s->block.resize(got);
-        s->blockStart = start;
+        fetched.data.resize(got);
+        s->blocks.append(std::move(fetched));
+        block = s->blocks.end() - 1;
     }
-    const qint64 inside = s->position - s->blockStart;
-    const qint64 count = qMin<qint64>(qint64(bytes), s->block.size() - inside);
+    block->lastUsed = ++s->reads;
+    const qint64 inside = s->position - block->start;
+    const qint64 count = qMin<qint64>(qint64(bytes), block->data.size() - inside);
     if (count <= 0)
         return 0;
-    memcpy(buffer, s->block.constData() + inside, count);
+    memcpy(buffer, block->data.constData() + inside, count);
     s->position += count;
     return count;
 }
@@ -502,8 +592,14 @@ int streamOpen(void *, char *uri, mpv_stream_cb_info *info)
             size = pair.mid(5).toLongLong();
     }
     auto device = bySerial(serial);
-    if (!device || objectId.isEmpty() || size <= 0)
+    if (!device || size <= 0)
         return MPV_ERROR_LOADING_FAILED;
+    if (objectId.isEmpty()) {   // remembered from when it was last connected: find it again
+        const QString path = QUrl::fromPercentEncoding(rest.section(QLatin1Char('?'), 0, 0).section(QLatin1Char('/'), 1).toUtf8());
+        objectId = objectIdAt(*device, path);
+        if (objectId.isEmpty())
+            return MPV_ERROR_LOADING_FAILED;
+    }
 
     auto *stream = new Stream;
     stream->device = device;
@@ -601,7 +697,7 @@ QList<Phone> list()
     return phones;
 }
 
-QList<File> findVideos(const QString &serial, const std::function<bool(const File &)> &found)
+QList<File> findVideos(const QString &serial, const std::function<bool(const QList<File> &)> &found)
 {
     ensureCom();
     QList<File> videos;
@@ -613,23 +709,35 @@ QList<File> findVideos(const QString &serial, const std::function<bool(const Fil
     {
         QString id;
         QString path;   // "" for a storage's top
+        int rank = 0;   // see folderRank
     };
-    QList<Folder> queue;
+    // The folders still to look in, by rank: the ones most likely to hold the user's own
+    // videos are looked in first, so they show up while the rest is still being searched.
+    QList<Folder> queues[kFolderRanks];
+    const auto next = [&](Folder &folder) {
+        for (QList<Folder> &queue : queues)
+            if (!queue.isEmpty()) {
+                folder = queue.takeFirst();
+                return true;
+            }
+        return false;
+    };
+    bool storageFolders = false;   // a phone with a memory card: each storage is a top folder
     {
         QMutexLocker lock(&device->mutex);
         QStringList storages;
         childIds(*device, QString::fromWCharArray(WPD_DEVICE_OBJECT_ID), storages);
         const auto described = describe(*device, storages);
+        storageFolders = storages.size() > 1;
         for (const auto &values : described) {
-            // With a memory card as well, each storage is a top folder ("SD card/DCIM/…").
+            // "SD card/DCIM/…"
             const QString name = stringValue(values.Get(), WPD_OBJECT_NAME);
-            queue.append({stringValue(values.Get(), WPD_OBJECT_ID), storages.size() > 1 ? name : QString()});
+            queues[0].append({stringValue(values.Get(), WPD_OBJECT_ID), storageFolders ? name : QString(), 0});
         }
     }
 
-    bool stopped = false;
-    while (!queue.isEmpty() && !stopped) {
-        const Folder folder = queue.takeFirst();
+    Folder folder;
+    while (next(folder)) {
         QList<ComPtr<IPortableDeviceValues>> children;
         {
             // A folder at a time, so playing a video from the phone isn't held up for long.
@@ -638,6 +746,9 @@ QList<File> findVideos(const QString &serial, const std::function<bool(const Fil
             if (childIds(*device, folder.id, ids) && !ids.isEmpty())
                 children = describe(*device, ids);
         }
+        // A storage's own folders get their rank from their name; deeper ones inherit theirs.
+        const bool top = folder.path.isEmpty() || (storageFolders && !folder.path.contains(QLatin1Char('/')));
+        QList<File> inFolder;
         for (const auto &values : std::as_const(children)) {
             QString name = stringValue(values.Get(), WPD_OBJECT_ORIGINAL_FILE_NAME);
             if (name.isEmpty())
@@ -648,32 +759,29 @@ QList<File> findVideos(const QString &serial, const std::function<bool(const Fil
             GUID type{};
             values->GetGuidValue(WPD_OBJECT_CONTENT_TYPE, &type);
             if (type == WPD_CONTENT_TYPE_FOLDER || type == WPD_CONTENT_TYPE_FUNCTIONAL_OBJECT) {
-                // Hidden folders (trash, caches, thumbnails) and apps' private data hold no videos
-                // worth listing, and can be huge.
-                const bool skip = name.startsWith(QLatin1Char('.'))
-                    || path.endsWith(QLatin1String("Android/data")) || path.endsWith(QLatin1String("Android/obb"));
-                if (!skip)
-                    queue.append({stringValue(values.Get(), WPD_OBJECT_ID), path});
+                if (!skipFolder(name, path)) {
+                    const int rank = top ? folderRank(name) : folder.rank;
+                    queues[rank].append({stringValue(values.Get(), WPD_OBJECT_ID), path, rank});
+                }
                 continue;
             }
             // Hidden files too: ".trashed-…" ones are in the phone's bin.
-            if (!isVideoName(name) || name.startsWith(QLatin1Char('.')))
+            ULONGLONG size = 0;
+            values->GetUnsignedLargeIntegerValue(WPD_OBJECT_SIZE, &size);
+            if (!isVideo(name, type, qint64(size)) || name.startsWith(QLatin1Char('.')))
                 continue;
             File file;
             file.objectId = stringValue(values.Get(), WPD_OBJECT_ID);
             file.path = path;
-            ULONGLONG size = 0;
-            values->GetUnsignedLargeIntegerValue(WPD_OBJECT_SIZE, &size);
             file.size = qint64(size);
             file.modified = dateValue(values.Get(), WPD_OBJECT_DATE_MODIFIED);
             if (file.size <= 0)
                 continue;   // still being written, or empty
-            videos.append(file);
-            if (found && !found(file)) {
-                stopped = true;
-                break;
-            }
+            inFolder.append(file);
         }
+        videos += inFolder;
+        if (found && !found(inFolder))
+            break;
     }
     return videos;
 }
@@ -683,6 +791,121 @@ void registerStream(mpv_handle *mpv)
     mpv_stream_cb_add_ro(mpv, "mtp", nullptr, streamOpen);
 }
 
+namespace {
+
+// Explorer's names for a phone's file: its device (as WPD knows it), then, within it, the
+// persistent unique id of its storage, of each folder it's in, and its own; empty if it
+// can't be found. A request per folder, climbing from the file.
+QStringList explorerIds(const QString &serial, const QString &objectId, const QString &path, QString &deviceId)
+{
+    ensureCom();
+    const auto device = bySerial(serial);
+    if (!device)
+        return {};
+    QString id = objectId.isEmpty() ? objectIdAt(*device, path) : objectId;
+    if (id.isEmpty())
+        return {};
+    deviceId = device->id;
+
+    QMutexLocker lock(&device->mutex);
+    auto keys = create<IPortableDeviceKeyCollection>(CLSID_PortableDeviceKeyCollection);
+    keys->Add(WPD_OBJECT_PARENT_ID);
+    keys->Add(WPD_OBJECT_PERSISTENT_UNIQUE_ID);
+    keys->Add(WPD_OBJECT_CONTENT_TYPE);
+    QStringList chain;
+    for (int depth = 0; depth < 64; ++depth) {
+        ComPtr<IPortableDeviceValues> values;
+        const std::wstring wid = id.toStdWString();
+        if (FAILED(retrying([&] {
+                values.Reset();
+                return device->properties->GetValues(wid.c_str(), keys.Get(), &values);
+            })))
+            return {};
+        const QString unique = stringValue(values.Get(), WPD_OBJECT_PERSISTENT_UNIQUE_ID);
+        if (unique.isEmpty())
+            return {};
+        chain.prepend(unique);
+        GUID type{};
+        values->GetGuidValue(WPD_OBJECT_CONTENT_TYPE, &type);
+        if (type == WPD_CONTENT_TYPE_FUNCTIONAL_OBJECT)   // the storage: the top
+            return chain;
+        id = stringValue(values.Get(), WPD_OBJECT_PARENT_ID);
+        if (id.isEmpty() || id == QString::fromWCharArray(WPD_DEVICE_OBJECT_ID))
+            return {};
+    }
+    return {};
+}
+
+// The child of `folder` that Explorer calls `name` (its in-folder parsing name), or null.
+// Explorer's phone folders don't parse these names back, so the folder is listed: about
+// a second per thousand files.
+PITEMID_CHILD shellChild(IShellFolder *folder, const QString &name)
+{
+    ComPtr<IEnumIDList> children;
+    if (folder->EnumObjects(nullptr, SHCONTF_FOLDERS | SHCONTF_NONFOLDERS, &children) != S_OK)
+        return nullptr;
+    const std::wstring wanted = name.toStdWString();
+    PITEMID_CHILD child = nullptr;
+    while (children->Next(1, &child, nullptr) == S_OK) {
+        STRRET text;
+        wchar_t parsing[MAX_PATH] = L"";
+        if (SUCCEEDED(folder->GetDisplayNameOf(child, SHGDN_INFOLDER | SHGDN_FORPARSING, &text)))
+            StrRetToBufW(&text, child, parsing, MAX_PATH);
+        if (_wcsicmp(parsing, wanted.c_str()) == 0)
+            return child;
+        CoTaskMemFree(child);
+    }
+    return nullptr;
+}
+
+} // namespace
+
+bool showInExplorer(const QString &serial, const QString &objectId, const QString &path)
+{
+    QString deviceId;
+    const QStringList ids = explorerIds(serial, objectId, path, deviceId);
+    if (ids.isEmpty())
+        return false;
+
+    // Shell calls want a single-threaded apartment.
+    const HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    bool shown = false;
+    // The phone itself parses ("This PC\<device>"); what's in it is found a level at a time.
+    const std::wstring device = (QStringLiteral("::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\") + deviceId).toStdWString();
+    PIDLIST_ABSOLUTE item = nullptr;
+    ComPtr<IShellFolder> folder;
+    if (SUCCEEDED(SHParseDisplayName(device.c_str(), nullptr, &item, 0, nullptr))
+        && SUCCEEDED(SHBindToObject(nullptr, item, nullptr, IID_PPV_ARGS(&folder)))) {
+        for (qsizetype i = 0; i < ids.size() && item; ++i) {
+            PITEMID_CHILD child = shellChild(folder.Get(), ids[i]);
+            if (!child) {
+                ILFree(item);
+                item = nullptr;
+                break;
+            }
+            PIDLIST_ABSOLUTE deeper = ILCombine(item, child);
+            ILFree(item);
+            item = deeper;
+            ComPtr<IShellFolder> sub;
+            if (i + 1 < ids.size() && FAILED(folder->BindToObject(child, nullptr, IID_PPV_ARGS(&sub)))) {
+                ILFree(item);
+                item = nullptr;
+            }
+            CoTaskMemFree(child);
+            folder = sub;
+        }
+        // Opens the folder it's in, with it selected.
+        if (item)
+            shown = SUCCEEDED(SHOpenFolderAndSelectItems(item, 0, nullptr, 0));
+    }
+    if (item)
+        ILFree(item);
+    folder.Reset();
+    if (SUCCEEDED(init))
+        CoUninitialize();
+    return shown;
+}
+
 #else // not Windows
 
 QList<Phone> list()
@@ -690,7 +913,7 @@ QList<Phone> list()
     return {};
 }
 
-QList<File> findVideos(const QString &, const std::function<bool(const File &)> &)
+QList<File> findVideos(const QString &, const std::function<bool(const QList<File> &)> &)
 {
     return {};
 }
@@ -699,13 +922,18 @@ void registerStream(mpv_handle *)
 {
 }
 
+bool showInExplorer(const QString &, const QString &, const QString &)
+{
+    return false;
+}
+
 #endif
 
 QString streamUrl(const QString &serial, const File &file)
 {
+    // In one go: the encoded path is full of "%2C" and the like, which a second arg() would fill in.
     return QStringLiteral("mtp://%1/%2?id=%3&size=%4")
-        .arg(serial, QString::fromUtf8(QUrl::toPercentEncoding(file.path, "/")), file.objectId)
-        .arg(file.size);
+        .arg(serial, QString::fromUtf8(QUrl::toPercentEncoding(file.path, "/")), file.objectId, QString::number(file.size));
 }
 
 } // namespace Phones

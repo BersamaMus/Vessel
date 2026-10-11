@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls.Basic
 
-// Blimp's yellow text button ("Play all", "See all").
+// The accent-coloured text button ("Play all", "See all").
 AbstractButton {
     id: button
 
@@ -16,7 +16,7 @@ AbstractButton {
 
     background: Rectangle {
         radius: height / 2
-        color: button.pressed ? Theme.accentSoft : button.hovered ? Qt.rgba(0.98, 0.8, 0.08, 0.1) : "transparent"
+        color: button.pressed ? Theme.accentSoft : button.hovered ? Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.1) : "transparent"
     }
 
     contentItem: Row {

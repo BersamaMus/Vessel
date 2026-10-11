@@ -26,7 +26,7 @@ ColumnLayout {
         Layout.maximumWidth: 360
         implicitHeight: 4
         radius: 2
-        color: "#33FFFFFF"
+        color: Theme.borderStrong
         Rectangle {
             width: parent.width * (root.active ? root.progress.done / root.progress.total : 0)
             height: parent.height

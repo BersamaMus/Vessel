@@ -10,6 +10,6 @@ Menu {
         implicitWidth: 220
         radius: Theme.radiusCard
         color: Theme.surfaceHigh
-        border.color: "#26FFFFFF"
+        border.color: Theme.border
     }
 }

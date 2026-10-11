@@ -30,6 +30,14 @@ Item {
                                      || results.type !== "" || results.resolution !== ""
     // Sorted or filtered: one list of everything in the folder instead of folders, then videos.
     readonly property bool flat: results.sort !== "name" || filtered
+    readonly property int videoCount: VideoLibrary.count >= 0 ? VideoLibrary.videoCountIn(folder) : 0
+
+    // Play all or Shuffle: what's listed, in its order, when sorted or filtered; otherwise
+    // everything in the folder and the folders inside it.
+    function playAll(shuffle) {
+        const paths = flat ? results.paths() : VideoLibrary.videoPathsIn(folder);
+        app.playAll(paths, isLibraryTab ? qsTr("Library") : VideoLibrary.folderName(folder), shuffle);
+    }
 
     clip: true
     // The thumbnails on show are made first.
@@ -45,7 +53,7 @@ Item {
         Layout.topMargin: 24
         Layout.bottomMargin: 12
         color: Theme.textPrimary
-        font.pixelSize: 20
+        font.pixelSize: Theme.sectionSize
         font.weight: Font.Bold
     }
 
@@ -60,7 +68,7 @@ Item {
             RowLayout {
                 Layout.fillWidth: true
                 Layout.leftMargin: page.StackView.index > 0 ? 8 : Theme.pagePadding
-                Layout.rightMargin: Theme.pagePadding
+                Layout.rightMargin: Theme.pagePadding - 8
                 Layout.topMargin: 14
                 spacing: 8
 
@@ -68,43 +76,60 @@ Item {
                     visible: page.StackView.index > 0
                     Layout.alignment: Qt.AlignTop
                     iconName: "back"
-                    tip: qsTr("Back")
+                    tip: qsTr("Back (Esc)")
                     onClicked: page.StackView.view.pop()
                 }
 
                 ColumnLayout {
                     Layout.fillWidth: true
-                    spacing: 2
+                    spacing: 0
 
-                    Text {
-                        Layout.fillWidth: true
-                        text: page.isLibraryTab ? qsTr("Library") : VideoLibrary.folderName(page.folder)
-                        color: Theme.textPrimary
-                        font.pixelSize: 26
-                        font.weight: Font.ExtraBold
-                        font.letterSpacing: -0.5
-                        elide: Text.ElideRight
-                    }
-                    Text {
-                        text: {
-                            const n = VideoLibrary.count >= 0 ? VideoLibrary.videoCountIn(page.folder) : 0;
-                            return n === 1 ? qsTr("1 video") : qsTr("%1 videos").arg(n);
-                        }
-                        color: Theme.textSecondary
-                        font.pixelSize: 14
+                    PageTitle {
+                        title: page.isLibraryTab ? qsTr("Library") : VideoLibrary.folderName(page.folder)
+                        subtitle: page.videoCount === 1 ? qsTr("1 video") : qsTr("%1 videos").arg(page.videoCount)
                     }
                     WorkProgress {
                         Layout.fillWidth: true
                         Layout.topMargin: 6
                         folder: page.folder
                     }
+                    // Everything here (sub-folders too), or just what the filters left, in the order shown.
+                    Row {
+                        Layout.topMargin: 6
+                        Layout.leftMargin: -12   // the icons line up with the title
+                        visible: page.flat ? results.count > 0 : page.videoCount > 0
+                        spacing: 4
+
+                        TextAction {
+                            text: qsTr("Play all")
+                            iconName: "play"
+                            onClicked: page.playAll(false)
+                        }
+                        TextAction {
+                            text: qsTr("Shuffle")
+                            iconName: "shuffle"
+                            onClicked: page.playAll(true)
+                        }
+                    }
                 }
 
+                // A drive's own page.
                 IconButton {
+                    Layout.alignment: Qt.AlignTop
+                    visible: Qt.platform.os === "windows" && VideoLibrary.drives.some(drive => drive.path === page.folder)
+                    iconName: "eject"
+                    tip: qsTr("Eject")
+                    onClicked: page.app.ejectDrive(page.folder)
+                }
+                IconButton {
+                    visible: !page.isLibraryTab
                     Layout.alignment: Qt.AlignTop
                     iconName: "search"
                     tip: qsTr("Search (Ctrl+F)")
                     onClicked: page.app.openSearch()
+                }
+                AppActions {
+                    visible: page.isLibraryTab
                 }
             }
 
@@ -120,6 +145,7 @@ Item {
 
         GridView {
             id: grid
+            SmoothWheel { flickable: grid }
 
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -139,6 +165,7 @@ Item {
                 VideoCard {
                     x: Theme.pagePadding
                     width: page.cardWidth
+                    path: cell.model.path
                     title: cell.model.title
                     // Sorted or filtered: what it's sorted by, or how far in, or else where it is.
                     subtitle: page.flat ? [cell.model.detail, cell.model.remainingText].filter(part => part).join("  •  ")
@@ -148,6 +175,7 @@ Item {
                     loading: cell.model.thumbnailPending
                     durationText: cell.model.durationText
                     progress: cell.model.progress
+                    watched: cell.model.finished
                     onClicked: page.app.play(cell.model.path)
                 }
             }
@@ -164,6 +192,8 @@ Item {
                     iconName: "folder"
                     text: page.isLibraryTab ? qsTr("No videos in your library yet. Add folders in Settings.")
                                             : qsTr("No videos in this folder.")
+                    actionText: page.isLibraryTab ? qsTr("Open Settings") : ""
+                    onActionTriggered: page.app.showTab(4)
                 }
 
                 // --- Sorted or filtered ------------------------------------------
@@ -197,12 +227,14 @@ Item {
                     delegate: VideoCard {
                         required property var model
                         width: 260
+                        path: model.path
                         title: model.title
                         subtitle: model.remainingText
                         thumbnail: model.thumbnail
                         loading: model.thumbnailPending
                         durationText: model.durationText
                         progress: model.progress
+                        watched: model.finished
                         onClicked: page.app.play(model.path)
                     }
                 }
@@ -228,6 +260,7 @@ Item {
                             width: page.cardWidth
                             name: model.name
                             countText: model.countText
+                            folder: model.folder
                             thumbnail: model.thumbnail
                             loading: model.thumbnailPending
                             onClicked: page.app.openFolder(model.folder)

@@ -5,6 +5,8 @@ import QtQuick.Controls.Basic
 AbstractButton {
     id: card
 
+    // The folder's path: right-clicking opens its menu (see Main.showFolderMenu).
+    property string folder
     property string name
     property string countText
     property url thumbnail
@@ -18,6 +20,11 @@ AbstractButton {
     implicitHeight: contentItem.implicitHeight
 
     HoverHandler { cursorShape: Qt.PointingHandCursor }
+    TapHandler {
+        acceptedButtons: Qt.RightButton
+        enabled: card.folder !== ""
+        onTapped: card.ApplicationWindow.window.showFolderMenu(card.folder)
+    }
 
     background: null
 
@@ -35,7 +42,7 @@ AbstractButton {
                 width: parent.width - 28
                 height: 20
                 radius: Theme.radiusArt
-                color: "#2A2A2A"
+                color: Theme.control
             }
             Rectangle {
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -43,7 +50,7 @@ AbstractButton {
                 width: parent.width - 14
                 height: 20
                 radius: Theme.radiusArt
-                color: "#3A3A3A"
+                color: Theme.controlHover
             }
 
             Item {
@@ -68,7 +75,7 @@ AbstractButton {
                     width: 30
                     height: 30
                     radius: 8
-                    color: "#CC000000"
+                    color: Theme.badge
                     Icon {
                         anchors.centerIn: parent
                         name: "folder"

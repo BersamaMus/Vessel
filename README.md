@@ -1,4 +1,4 @@
-# Better Video Player
+# Vessel
 
 Offline video player built with C++20, Qt 6 (Qt Quick/QML) and libmpv
 (which bundles FFmpeg for demuxing/decoding). The look follows Blimp: black
@@ -19,10 +19,13 @@ A different Qt location can be set by overriding `CMAKE_PREFIX_PATH` in a `CMake
 
 From a *Developer PowerShell for VS*:
 
+The exe is `VesselPlayer.exe` rather than `Vessel.exe`: Xbox Game Bar takes `Vessel.exe` for a
+game of that name and, with background recording on, records it, microphone included.
+
 ```powershell
 cmake --preset debug          # or: release
 cmake --build --preset debug
-.\build\debug\BetterVideoPlayer.exe path\to\video.mp4
+.\build\debug\VesselPlayer.exe path\to\video.mp4
 ```
 
 The post-build step copies `libmpv-2.dll` and runs `windeployqt`, so the build folder runs as-is.
@@ -33,9 +36,9 @@ and libmpv checks are slow): use it for everyday watching, and Debug for develop
 
 For testing and profiling:
 
-- `BVP_DATA_DIR=<folder>` points the app at its own settings, history and thumbnail cache, so a
+- `VESSEL_DATA_DIR=<folder>` points the app at its own settings, history and thumbnail cache, so a
   test copy can't touch your real ones.
-- `QT_LOGGING_RULES=bvp.perf.debug=true` logs how long scans and library updates take.
+- `QT_LOGGING_RULES=vessel.perf.debug=true` logs how long scans and library updates take.
 
 ## The player
 
@@ -110,7 +113,8 @@ what you typed come first, then titles that contain it, then videos whose title 
 contain every word ("house season 2"). It has the same sort and filters, and remembers your
 last few searches.
 
-App data lives in `%LOCALAPPDATA%\BetterVideoPlayer`:
+App data lives in `%LOCALAPPDATA%\Vessel` (moved there from `%LOCALAPPDATA%\BetterVideoPlayer`,
+the app's folder before it was renamed, the first time Vessel runs):
 
 - `thumbnails\`: JPEG thumbnails, named by a hash of path, size and modified time
 - `metadata.json`: durations, sizes and tagged years, and which files could not be thumbnailed
@@ -140,7 +144,7 @@ card says so. Windows only, for now.
 
 ## Architecture
 
-- **C++** (`src/`), registered as the `BetterVideoPlayer` QML module:
+- **C++** (`src/`), registered as the `Vessel` QML module:
   - `MpvItem`: a QML video item (`QQuickFramebufferObject`) that owns an mpv instance and
     draws through mpv's OpenGL render API. Qt Quick is forced onto OpenGL in `main.cpp`.
   - `VideoLibrary` (QML singleton): scanning, the metadata cache, watch history, and the models.
@@ -148,7 +152,7 @@ card says so. Windows only, for now.
   - `PhoneDevices`: phones over USB (Windows Portable Devices / MTP), and the `mtp://` stream.
   - `VideoQuery`: a `VideoModel` created in QML, with search text, sort and filter properties
     (behind `FilterBar` and `SearchPage`).
-  - `Thumbnailer`: 2 to 4 worker processes (the app run as `BetterVideoPlayer --thumbnail-worker`),
+  - `Thumbnailer`: 2 to 4 worker processes (the app run as `VesselPlayer --thumbnail-worker`),
     each grabbing one frame at a time with headless libmpv (`vo=image`) and answering over
     stdin/stdout. A file that crashes the decoder only takes its worker down (the file is then
     remembered as unreadable), one taking over 45 s is killed, and workers exit when the queue
