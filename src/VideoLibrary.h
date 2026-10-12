@@ -38,13 +38,16 @@ struct VideoInfo
     QString cacheKey;
     QString title;
     QString dir;        // absolute folder the file is in
-    QString root;       // the library folder or drive it was found under
+    QString root;       // the drive (or Videos folder) it was found under
     QString type;       // the file extension, lowercase: "mp4"
     bool external = false;
     // On a phone (and external): `path` is "mtp://<serial>/DCIM/Camera/…", and it's read
     // through its MTP object id (see PhoneDevices) rather than as a file.
     bool phone = false;
     QString objectId;
+    // In OneDrive (or another cloud folder) but not on this computer: no thumbnail is made,
+    // as reading it would download it. Playing it does.
+    bool onlineOnly = false;
     qint64 size = 0;
     QDateTime modified;
     QDateTime added;
@@ -72,8 +75,8 @@ struct VideoMeta
     bool probed = false;   // looked at since sizes were kept (older caches lack them)
 };
 
-// Where videos come from: a library folder, a connected external drive, or a phone
-// (also external; its path is "mtp://<serial>").
+// Where videos come from: one of the computer's own drives (the library), a connected
+// external drive, or a phone (also external; its path is "mtp://<serial>").
 struct VideoSource
 {
     QString path;
@@ -85,17 +88,17 @@ struct VideoSource
     qint64 bytesTotal = 0;
     qint64 bytesFree = 0;
     bool scanning = false;
-    bool announce = false;  // say so when its first scan finishes (just plugged in, or added)
+    bool announce = false;  // say so when its first scan finishes (just plugged in)
     // Videos found so far by the scan in progress (counted on the scanning thread).
     std::shared_ptr<std::atomic_int> found = std::make_shared<std::atomic_int>(0);
 };
 
-// The videos in the library folders (the user's Videos folder by default) and
-// on connected external drives, their cached thumbnails and durations, and how
-// far each one has been watched.
+// The videos on the computer's own drives (the library: C: and any other built-in
+// drive, leaving out Windows', apps' and code's folders) and on connected external
+// drives, their cached thumbnails and durations, and how far each one has been watched.
 //
 // Folders are absolute paths. The empty folder "" stands for the library as a
-// whole: its sub-folders are the library folders themselves.
+// whole: its sub-folders are its drives.
 class VideoLibrary : public QObject
 {
     Q_OBJECT
@@ -105,9 +108,8 @@ class VideoLibrary : public QObject
     Q_PROPERTY(bool scanning READ scanning NOTIFY scanningChanged)
     Q_PROPERTY(int count READ count NOTIFY libraryReset)
     Q_PROPERTY(int libraryCount READ libraryCount NOTIFY libraryReset)
-    Q_PROPERTY(QStringList libraryFolders READ libraryFolders NOTIFY libraryFoldersChanged)
-    // What the Library tab opens: the one library folder, or "" if there are several.
-    Q_PROPERTY(QString libraryHome READ libraryHome NOTIFY libraryFoldersChanged)
+    // The user's Videos folder, what the Videos tab shows. Part of the library.
+    Q_PROPERTY(QString videosFolder READ videosFolder CONSTANT)
     // Background work, for progress bars: videos found so far by the scans in progress,
     // and thumbnails made out of those to make (both 0 when there are none to make).
     Q_PROPERTY(int videosFound READ videosFound NOTIFY progressChanged)
@@ -121,6 +123,7 @@ class VideoLibrary : public QObject
     Q_PROPERTY(VideoModel *continueWatching READ continueWatching CONSTANT)
     Q_PROPERTY(VideoModel *recentlyAdded READ recentlyAdded CONSTANT)
     Q_PROPERTY(VideoModel *quickPicks READ quickPicks CONSTANT)
+    // Every folder in the library with videos in it (not counting its sub-folders').
     Q_PROPERTY(FolderModel *folders READ folders CONSTANT)
     // Every video watched (finished or not) that's here now, most recent first; its detail
     // is the day it was watched ("Today", "Yesterday", "12 Oct 2026").
@@ -138,8 +141,7 @@ public:
     int thumbnailsTotal() const { return int(m_thumbBatch.size()); }
     int count() const { return m_videos.size(); }
     int libraryCount() const;
-    QStringList libraryFolders() const;
-    QString libraryHome() const;
+    QString videosFolder() const { return m_videosFolder; }
     QVariantList drives() const;
     QVariantList phones() const;
     VideoModel *continueWatching() const { return m_continueWatching; }
@@ -153,12 +155,6 @@ public:
     // Looks for new and removed videos; rescanFinished() reports what changed.
     Q_INVOKABLE void rescan();
     Q_INVOKABLE void reshuffleQuickPicks();
-    // Returns an error message, or "" when the folder was added. It goes at `position` in
-    // libraryFolders (for Undo), or at the end.
-    Q_INVOKABLE QString addLibraryFolder(const QString &path, int position = -1);
-    // Takes the folder out of the library (the files stay where they are) and returns
-    // where it was in libraryFolders, or -1.
-    Q_INVOKABLE int removeLibraryFolder(const QString &path);
 
     // Models for browsing one folder.
     Q_INVOKABLE VideoModel *videosIn(const QString &folder);
@@ -267,13 +263,11 @@ public:
     void track(VideoModel *model);
     // "Season 2 · House MD…": where a video is, for subtitles.
     QString locationOf(const VideoInfo &video) const;
-    QStringList libraryRoots() const;
 
 signals:
     void scanningChanged();
     void phonePlayingChanged();
     void libraryReset();
-    void libraryFoldersChanged();
     void drivesChanged();
     void videoChanged(int index);
     void progressChanged();
@@ -286,8 +280,6 @@ signals:
     void driveEjectFailed(const QString &path, const QString &name, const QString &error);
     // A rescan the user asked for is done: how many library videos, and how many came and went.
     void rescanFinished(int count, int added, int removed);
-    // A library folder the user just added has been scanned.
-    void libraryFolderAdded(const QString &name, const QString &path, int count);
     // A phone's video asked for with showInFileManager() is showing in Explorer, or couldn't be found.
     void phoneFileShown(const QString &path, bool shown);
     // A move asked for with moveVideo() is done: `error` is "" if it worked.
@@ -296,13 +288,20 @@ signals:
 private:
     void scanAll();
     void scanSource(const QString &path);
+    // Looks through one folder of a source again after a change there: just its own files,
+    // or (`recursive`) the folders inside it too.
+    void rescanPart(const QString &source, const QString &folder, bool recursive);
+    // The library's sources are the computer's own drives (and the Videos folder, if it's
+    // somewhere else): taken in or let go as they come and go.
+    void updateLibrarySources();
     void onScanFinished(const QString &path, QList<VideoInfo> videos);
     // Some of a phone's videos, found while it's still being scanned.
     void onVideosFound(const QString &path, const QList<VideoInfo> &found);
     void onDrivesChanged();
-    // Library folders (not on drives that get unplugged) are watched for videos coming and going.
+    // The library's drives are watched for videos coming and going.
     void updateWatchedFolders();
-    void onFolderChanged(const QString &folder);
+    // Looked at again a moment after the last change: `folder`'s own files, or its whole tree.
+    void onFolderChanged(const QString &folder, bool recursive);
     // Phones: looked for every couple of seconds (off the UI thread), and taken in or let
     // go like drives as they're connected, unlocked, or unplugged.
     void pollPhones();
@@ -311,7 +310,7 @@ private:
     // While scanning: batches of videos are listed at most every couple of seconds, as
     // each rebuild resets every list and the thumbnail queue.
     void scheduleRebuild();
-    // Takes a video out of every source's list (a library folder on a drive is in both).
+    // Takes a video out of every source's list (the Videos folder on an external drive is in both).
     void forgetScanned(const QString &path);
     void onThumbnailFinished(const QString &path, bool ok, double duration, int width, int height, int year);
     void queueThumbnails();
@@ -328,13 +327,13 @@ private:
     QString sourceName(const QString &path) const;
     QString keyFor(const QString &path) const;
     QString thumbnailFile(const VideoInfo &video) const;
-    void saveLibraryFolders();
     void loadState();
     void scheduleSave();
     void save();
 
     QString m_dataDir;
-    QList<VideoSource> m_sources;                 // library folders first, then drives
+    QString m_videosFolder;
+    QList<VideoSource> m_sources;                 // the library's first, then external drives and phones
     QHash<QString, QList<VideoInfo>> m_scanned;   // source path -> its videos
     int m_pendingScans = 0;
     // The library before a user-requested rescan, to report what changed (empty: not reporting).
@@ -365,7 +364,7 @@ private:
 
     DriveWatcher *m_driveWatcher = nullptr;
     FolderWatcher *m_folderWatcher = nullptr;
-    QSet<QString> m_changedFolders;   // waiting for m_changeTimer, then rescanned
+    QHash<QString, bool> m_changedFolders;   // waiting for m_changeTimer, then rescanned (whole tree: true)
     QSet<QString> m_ejected;          // drives ejected from here, until they leave
     bool m_phonePlaying = false;
     QTimer m_changeTimer;

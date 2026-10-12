@@ -1,10 +1,8 @@
-import QtCore
 import QtQuick
 import QtQuick.Controls.Basic
-import QtQuick.Dialogs
 import QtQuick.Layouts
 
-// Library folders, the player, subtitles and the rest, under a pinned title.
+// The library, the player, subtitles and the rest, under a pinned title.
 Item {
     PageBar {
         id: bar
@@ -119,99 +117,14 @@ Item {
             width: page.availableWidth
             spacing: 0
 
-            // --- Library folders -------------------------------------------------
+            // --- Library -----------------------------------------------------------
             SectionTitle {
-            Layout.topMargin: 12
-            text: qsTr("Library folders")
-        }
-            Note {
-                text: qsTr("Videos in these folders appear on Home and in the Library. Removing a folder here doesn't delete anything.")
+                Layout.topMargin: 12
+                text: qsTr("Library")
             }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.leftMargin: Theme.pagePadding
-                Layout.rightMargin: Theme.pagePadding
-                Layout.topMargin: 14
-                implicitHeight: folderList.implicitHeight + 12
-                radius: Theme.radiusCard
-                color: Theme.surface
-                border.color: Theme.borderSoft
-
-                ColumnLayout {
-                    id: folderList
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.margins: 6
-                    spacing: 0
-
-                    Text {
-                        visible: VideoLibrary.libraryFolders.length === 0
-                        Layout.margins: 14
-                        text: qsTr("No folders yet. Add one to fill your library.")
-                        color: Theme.textSecondary
-                        font.pixelSize: 14
-                    }
-
-                    Repeater {
-                        model: VideoLibrary.libraryFolders
-
-                        delegate: Rectangle {
-                            id: row
-
-                            required property string modelData
-
-                            Layout.fillWidth: true
-                            implicitHeight: 64
-                            radius: Theme.radiusArt
-                            color: rowHover.hovered ? Theme.hover : "transparent"
-
-                            HoverHandler { id: rowHover }
-
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.leftMargin: 14
-                                anchors.rightMargin: 6
-                                spacing: 14
-
-                                Icon {
-                                    name: "folder"
-                                    color: Theme.accent
-                                }
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 2
-                                    Text {
-                                        Layout.fillWidth: true
-                                        text: VideoLibrary.folderName(row.modelData)
-                                        color: Theme.textPrimary
-                                        font.pixelSize: 15
-                                        font.weight: Font.DemiBold
-                                        elide: Text.ElideRight
-                                    }
-                                    Text {
-                                        Layout.fillWidth: true
-                                        text: {
-                                            const n = VideoLibrary.count >= 0 ? VideoLibrary.videoCountIn(row.modelData) : 0;
-                                            return page.nativePath(row.modelData) + "  •  "
-                                                 + (n === 1 ? qsTr("1 video") : qsTr("%1 videos").arg(n));
-                                        }
-                                        color: Theme.textSecondary
-                                        font.pixelSize: 13
-                                        elide: Text.ElideMiddle
-                                    }
-                                }
-                                IconButton {
-                                    iconName: "close"
-                                    iconColor: Theme.textSecondary
-                                    tip: qsTr("Remove from library")
-                                    onClicked: page.app?.removeLibraryFolder(row.modelData)
-                                }
-                            }
-                        }
-                    }
-                }
+            Note {
+                text: qsTr("Vessel finds the videos on this computer's own drives by itself, leaving out Windows', apps' and code's folders. They're all in the Library; the Videos tab shows just your Videos folder (%1).")
+                      .arg(page.nativePath(VideoLibrary.videosFolder))
             }
 
             RowLayout {
@@ -220,22 +133,11 @@ Item {
                 spacing: 4
 
                 TextAction {
-                    text: qsTr("Add folder")
-                    iconName: "add"
-                    onClicked: folderDialog.open()
-                }
-                TextAction {
                     text: VideoLibrary.scanning ? qsTr("Scanning…") : qsTr("Rescan")
                     iconName: "refresh"
                     enabled: !VideoLibrary.scanning
                     onClicked: page.app?.rescanLibrary()
                 }
-            }
-
-            Note {
-                id: folderError
-                visible: text !== ""
-                color: Theme.error
             }
 
             // --- Player ------------------------------------------------------------
@@ -412,13 +314,6 @@ Item {
             }
 
             Item { implicitHeight: 32 }
-        }
-
-        FolderDialog {
-            id: folderDialog
-            title: qsTr("Add a folder to your library")
-            currentFolder: StandardPaths.writableLocation(StandardPaths.HomeLocation)
-            onAccepted: folderError.text = VideoLibrary.addLibraryFolder(VideoLibrary.localPath(selectedFolder))
         }
     }
 }

@@ -475,28 +475,43 @@ void FolderModel::refresh()
             entry.cover = index;
     };
 
-    if (m_mode == Children && m_parentFolder.isEmpty()) {
-        // The library as a whole: one entry per library folder.
+    if (m_mode == VideoFolders) {
+        // Every folder with videos of its own, wherever it is in the library.
+        for (int i = 0; i < m_library->count(); ++i) {
+            const VideoInfo &v = m_library->video(i);
+            if (!v.external)
+                add(v.dir, v.dir == v.root ? m_library->folderName(v.root) : v.dir.section(QLatin1Char('/'), -1), i);
+        }
+    } else if (m_parentFolder.isEmpty()) {
+        // The library as a whole: one entry per drive.
         for (int i = 0; i < m_library->count(); ++i) {
             const VideoInfo &v = m_library->video(i);
             if (!v.external)
                 add(v.root, m_library->folderName(v.root), i);
         }
     } else {
-        const QStringList parents = m_mode == TopFolders ? m_library->libraryRoots() : QStringList{m_parentFolder};
-        for (const QString &parent : parents) {
-            const QString prefix = parent.endsWith(QLatin1Char('/')) ? parent : parent + QLatin1Char('/');
-            for (int i = 0; i < m_library->count(); ++i) {
-                const VideoInfo &v = m_library->video(i);
-                const QString name = v.dir.mid(prefix.size()).section(QLatin1Char('/'), 0, 0);
-                if (!v.dir.startsWith(prefix) || name.isEmpty())
-                    continue;   // outside this folder, or directly in it
-                add(prefix + name, name, i);
-            }
+        const QString prefix = m_parentFolder.endsWith(QLatin1Char('/')) ? m_parentFolder : m_parentFolder + QLatin1Char('/');
+        for (int i = 0; i < m_library->count(); ++i) {
+            const VideoInfo &v = m_library->video(i);
+            const QString name = v.dir.mid(prefix.size()).section(QLatin1Char('/'), 0, 0);
+            if (!v.dir.startsWith(prefix) || name.isEmpty())
+                continue;   // outside this folder, or directly in it
+            add(prefix + name, name, i);
         }
     }
 
     QList<Entry> entries = byFolder.values();
+    if (m_mode == VideoFolders) {
+        // Folders of the same name ("Season 1", "Camera") say which folder they're in.
+        QHash<QString, int> named;
+        for (const Entry &entry : std::as_const(entries))
+            ++named[entry.name.toLower()];
+        for (Entry &entry : entries) {
+            const QString parent = entry.folder.section(QLatin1Char('/'), -2, -2);
+            if (named.value(entry.name.toLower()) > 1 && !parent.isEmpty() && !parent.endsWith(QLatin1Char(':')))
+                entry.name += QStringLiteral(" · ") + parent;
+        }
+    }
     QCollator collator;
     collator.setNumericMode(true);
     collator.setCaseSensitivity(Qt::CaseInsensitive);

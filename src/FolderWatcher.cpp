@@ -58,7 +58,8 @@ void FolderWatcher::setFolders(const QStringList &folders)
         const std::wstring path = QDir::toNativeSeparators(folder).toStdWString();
         const HANDLE stop = watch->stop;
         QPointer<FolderWatcher> self = this;
-        watch->thread = std::thread([self, folder, path, stop] {
+        const auto ignored = m_ignored ? m_ignored : [](const QString &) { return false; };
+        watch->thread = std::thread([self, folder, path, stop, ignored] {
             // Shared with everyone, so the folder can still be renamed or deleted.
             HANDLE dir = CreateFileW(path.c_str(), FILE_LIST_DIRECTORY,
                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
@@ -83,36 +84,47 @@ void FolderWatcher::setFolders(const QStringList &folders)
                 DWORD bytes = 0;
                 if (!GetOverlappedResult(dir, &overlapped, &bytes, FALSE))
                     break;
-                // Worth a look: a video file changing, or a folder arriving (named or renamed
-                // to). Whether something gone was a folder ("Show.S01" as much as "Show")
-                // can't be told from here any more: the library knows what was in it.
-                // No details (too many changes at once for the buffer): look anyway.
-                bool relevant = bytes == 0;
+                // Worth a look: a video file changing (its folder), or a folder arriving
+                // (named or renamed to). Whether something gone was a folder ("Show.S01" as
+                // much as "Show") can't be told from here any more: the library knows what
+                // was in it. No details (too many changes at once for the buffer): look
+                // through it all.
+                const QString base = folder.endsWith(QLatin1Char('/')) ? folder : folder + QLatin1Char('/');
+                QStringList dirs;
+                QStringList trees;
                 QStringList gone;
-                for (DWORD offset = 0; bytes > 0 && !relevant;) {
+                if (bytes == 0)
+                    trees.append(folder);
+                for (DWORD offset = 0; bytes > 0;) {
                     const auto *info = reinterpret_cast<const FILE_NOTIFY_INFORMATION *>(buffer + offset);
                     const QString name = QString::fromWCharArray(info->FileName, int(info->FileNameLength / sizeof(WCHAR)));
-                    if (isVideoName(name)) {
-                        relevant = true;
+                    const QString full = base + QDir::fromNativeSeparators(name);
+                    if (ignored(full)) {
+                        // Somewhere the library doesn't look (an app's data, Windows' own folders).
+                    } else if (isVideoName(name)) {
+                        const QString dir = full.section(QLatin1Char('/'), 0, -2);
+                        if (!dirs.contains(dir))
+                            dirs.append(dir);
                     } else if (info->Action == FILE_ACTION_ADDED || info->Action == FILE_ACTION_RENAMED_NEW_NAME) {
-                        relevant = QFileInfo(folder + QLatin1Char('/') + QDir::fromNativeSeparators(name)).isDir();
+                        if (QFileInfo(full).isDir())
+                            trees.append(full);
                     } else if (info->Action == FILE_ACTION_REMOVED || info->Action == FILE_ACTION_RENAMED_OLD_NAME) {
-                        gone.append(folder + QLatin1Char('/') + QDir::fromNativeSeparators(name));
-                        relevant = gone.size() > kMaxGone;
+                        if (gone.size() <= kMaxGone)
+                            gone.append(full);
+                        else if (!trees.contains(folder))
+                            trees.append(folder);
                     }
                     if (info->NextEntryOffset == 0)
                         break;
                     offset += info->NextEntryOffset;
                 }
-                if (relevant)
-                    gone.clear();
-                if (relevant || !gone.isEmpty())
-                    QMetaObject::invokeMethod(qApp, [self, folder, gone] {
+                if (!dirs.isEmpty() || !trees.isEmpty() || !gone.isEmpty())
+                    QMetaObject::invokeMethod(qApp, [self, folder, dirs, trees, gone] {
                         if (!self)
                             return;
-                        if (gone.isEmpty())
-                            emit self->changed(folder);
-                        else
+                        if (!dirs.isEmpty() || !trees.isEmpty())
+                            emit self->changed(folder, dirs, trees);
+                        if (!gone.isEmpty())
                             emit self->removed(folder, gone);
                     }, Qt::QueuedConnection);
             }

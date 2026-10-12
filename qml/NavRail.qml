@@ -2,12 +2,12 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Shapes
 
-// The tabs down the left side of the window, as in Blimp: Home, Library and
-// External at the top, Settings at the bottom.
+// The tabs down the left side of the window, as in Blimp: Home, Videos, Library,
+// External and Phone at the top, Settings at the bottom.
 Rectangle {
     id: rail
 
-    // 0 Home, 1 Library, 2 External, 3 Phone, 4 Settings
+    // 0 Home, 1 Videos, 2 Library, 3 External, 4 Phone, 5 Settings
     property int currentIndex: 0
     signal tabClicked(int index)
 
@@ -88,9 +88,10 @@ Rectangle {
         spacing: 2
 
         Tab { tabIndex: 0; iconName: "home"; label: qsTr("Home") }
-        Tab { tabIndex: 1; iconName: "library"; label: qsTr("Library") }
-        Tab { tabIndex: 2; iconName: "usb"; label: qsTr("External"); badge: VideoLibrary.drives.length }
-        Tab { tabIndex: 3; iconName: "smartphone"; label: qsTr("Phone"); badge: VideoLibrary.phones.length }
+        Tab { tabIndex: 1; iconName: "movie"; label: qsTr("Videos") }
+        Tab { tabIndex: 2; iconName: "library"; label: qsTr("Library") }
+        Tab { tabIndex: 3; iconName: "usb"; label: qsTr("External"); badge: VideoLibrary.drives.length }
+        Tab { tabIndex: 4; iconName: "smartphone"; label: qsTr("Phone"); badge: VideoLibrary.phones.length }
     }
 
     // Background work: a ring that fills as thumbnails are made, or spins while
@@ -172,7 +173,7 @@ Rectangle {
         id: settingsTab
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 8
-        tabIndex: 4
+        tabIndex: 5
         iconName: "settings"
         label: qsTr("Settings")
     }

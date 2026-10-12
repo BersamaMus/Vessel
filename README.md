@@ -90,8 +90,13 @@ file, and can add a subtitle file by hand.
 
 ## The library
 
-The app scans your Videos folder in the background (empty files, such as unfinished
-downloads, are skipped). For each video, a headless libmpv instance grabs a frame 20% in
+The app scans the computer's own drives (C: and any other built-in drive) in the background.
+It skips Windows' and apps' folders (`Windows`, `Program Files`, `ProgramData`, `AppData`,
+dot-folders, the recycle bin), code projects (a folder with `.git`, `package.json`,
+`CMakeLists.txt` and the like), games' files (`steamapps`) and empty files, such as unfinished
+downloads. The side rail has two views of the result: **Videos** is your Videos folder, and
+**Library** is every folder on those drives that holds videos. New and removed videos show up by
+themselves; only the folder that changed is looked at again. For each video, a headless libmpv instance grabs a frame 20% in
 and reads the duration, size in pixels and any release-date tag. All are cached, so later
 launches are instant.
 

@@ -45,8 +45,6 @@ namespace {
 constexpr int kShelfSize = 20;
 constexpr int kQuickPicks = 16;
 
-const QString kFoldersKey = QStringLiteral("library/folders");
-
 QString prettyTitle(const QString &baseName)
 {
     // "A.Star.Is.Born.2018" -> "A Star Is Born 2018"
@@ -78,13 +76,83 @@ bool isEditorCache(const QString &folder)
     return folder.contains(QLatin1String("/Adobe Premiere Pro Video Previews"), Qt::CaseInsensitive);
 }
 
-// Windows' own folders, never anyone's videos: the recycle bin (deleted videos would come
-// back), System Volume Information, and apps' data and caches in a user's AppData.
+// Folders, anywhere, that are never anyone's videos: Windows' own (the recycle bin, where
+// deleted videos would come back, and its other "$" folders; System Volume Information),
+// apps' data and caches (a user's AppData, ".cache" and other dot-folders), code's
+// packages, and games' files.
 bool isSkippedFolder(const QString &name)
 {
-    return name.compare(QLatin1String("$RECYCLE.BIN"), Qt::CaseInsensitive) == 0
-        || name.compare(QLatin1String("System Volume Information"), Qt::CaseInsensitive) == 0
-        || name.compare(QLatin1String("AppData"), Qt::CaseInsensitive) == 0;
+    static const QSet<QString> names{
+        QStringLiteral("system volume information"), QStringLiteral("appdata"), QStringLiteral("node_modules"),
+        QStringLiteral("bower_components"), QStringLiteral("site-packages"), QStringLiteral("__pycache__"),
+        QStringLiteral("steamapps"), QStringLiteral("epic games"), QStringLiteral("xboxgames"),
+        QStringLiteral("windowsapps"), QStringLiteral("wpsystem"),
+    };
+    return name.startsWith(QLatin1Char('$')) || name.startsWith(QLatin1Char('.')) || names.contains(name.toLower());
+}
+
+// Folders at the top of a drive that are Windows' or apps' own.
+bool isSystemFolder(const QString &name)
+{
+    static const QSet<QString> names{
+        QStringLiteral("windows"), QStringLiteral("windows.old"), QStringLiteral("program files"),
+        QStringLiteral("program files (x86)"), QStringLiteral("programdata"), QStringLiteral("recovery"),
+        QStringLiteral("perflogs"), QStringLiteral("msocache"), QStringLiteral("intel"), QStringLiteral("amd"),
+        QStringLiteral("nvidia"), QStringLiteral("inetpub"), QStringLiteral("onedrivetemp"),
+        QStringLiteral("config.msi"), QStringLiteral("drivers"),
+    };
+    return names.contains(name.toLower());
+}
+
+// A file (or folder) that says its folder is a code project: its videos, and those of the
+// folders inside it, are the project's (test clips, build output), not anyone's to watch.
+bool isProjectFile(const QString &name)
+{
+    static const QSet<QString> names{
+        QStringLiteral(".git"), QStringLiteral(".hg"), QStringLiteral(".svn"), QStringLiteral("package.json"),
+        QStringLiteral("pubspec.yaml"), QStringLiteral("build.gradle"), QStringLiteral("build.gradle.kts"),
+        QStringLiteral("settings.gradle"), QStringLiteral("cmakelists.txt"), QStringLiteral("cargo.toml"),
+        QStringLiteral("go.mod"), QStringLiteral("pom.xml"), QStringLiteral("composer.json"),
+        QStringLiteral("gemfile"), QStringLiteral("pyproject.toml"), QStringLiteral("setup.py"),
+        QStringLiteral("requirements.txt"), QStringLiteral("makefile"),
+    };
+    const QString lower = name.toLower();
+    return names.contains(lower) || lower.endsWith(QLatin1String(".sln")) || lower.endsWith(QLatin1String(".csproj"))
+        || lower.endsWith(QLatin1String(".xcodeproj"));
+}
+
+// "C:/" or "D:/": a whole drive.
+bool isDriveRoot(const QString &folder)
+{
+    return folder.size() == 3 && folder.endsWith(QLatin1String(":/"));
+}
+
+// Whether a path is somewhere scans don't look: in a skipped folder, or in a system folder
+// at the top of a drive. Only the path's own names are looked at, not what's on disk.
+bool isSkippedPath(const QString &path)
+{
+    const QStringList parts = path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (qsizetype i = 0; i < parts.size(); ++i) {
+        if (i == 0 && parts[0].endsWith(QLatin1Char(':')))
+            continue;   // the drive
+        if (isSkippedFolder(parts[i]) || (i == 1 && parts[0].endsWith(QLatin1Char(':')) && isSystemFolder(parts[i])))
+            return true;
+    }
+    return false;
+}
+
+// Whether `folder`, under `root`, is in a code project: one of the folders above it (but
+// below `root`) has a project's files.
+bool isInProject(const QString &root, const QString &folder)
+{
+    const QString base = withSlash(root);
+    for (QString dir = QFileInfo(folder).path(); dir.startsWith(base) && dir.size() > base.size();
+         dir = QFileInfo(dir).path()) {
+        const QStringList names = QDir(dir).entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot);
+        if (std::any_of(names.begin(), names.end(), isProjectFile))
+            return true;
+    }
+    return false;
 }
 
 // "Spider-Man Homecoming (2017)" -> "spidermanhomecoming2017", so names that only
@@ -169,7 +237,7 @@ QString placeKeyOf(const QString &dir, const QString &root, const QString &sourc
     return searchKey(inside + QLatin1Char(' ') + sourceName);
 }
 
-// A video file under `root` (a library folder or drive), with everything that can be
+// A video file under `root` (a drive, or the Videos folder), with everything that can be
 // worked out from the file system alone. `placeKey` is its folder's search text.
 VideoInfo fileVideo(const QFileInfo &file, const QString &root, bool external, const QString &driveId,
                     const QString &placeKey)
@@ -193,6 +261,11 @@ VideoInfo fileVideo(const QFileInfo &file, const QString &root, bool external, c
     video.added = born.isValid() ? born : video.modified;
     video.cacheKey = cacheKeyOf(video.key, video.size, video.modified);
     video.titleKey = searchKey(video.title);
+#ifdef Q_OS_WIN
+    const DWORD attributes = GetFileAttributesW(reinterpret_cast<const wchar_t *>(QDir::toNativeSeparators(video.path).utf16()));
+    video.onlineOnly = attributes != INVALID_FILE_ATTRIBUTES
+        && (attributes & (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_OFFLINE));
+#endif
     return video;
 }
 
@@ -204,10 +277,17 @@ constexpr int kScanReportMs = 1000;
 // time: each folder's videos, then its sub-folders' in natural order, so whole folders are
 // finished one after another. Reported in batches as they're found, so finished folders
 // can be browsed (and get their thumbnails) while the rest is still being looked through.
-// `sourceName` is what the library folder or drive is called, for search.
-void scanFolder(QPromise<QList<VideoInfo>> &promise, const QString &root, bool external, const QString &driveId,
-                const QString &sourceName, std::shared_ptr<std::atomic_int> found)
+// `sourceName` is what the drive (or folder) is called, for search.
+//
+// `start` is where to look (a folder inside `root`, after a change there, or `root` itself);
+// with `recursive` false, only that folder's own files.
+void scanFolder(QPromise<QList<VideoInfo>> &promise, const QString &root, const QString &start, bool recursive,
+                bool external, const QString &driveId, const QString &sourceName, std::shared_ptr<std::atomic_int> found)
 {
+    // Part of a drive that isn't looked through: nothing there.
+    if (start != root && (isSkippedPath(isDriveRoot(root) ? start : start.mid(root.size())) || isInProject(root, start)))
+        return;
+
     QCollator collator;
     collator.setNumericMode(true);
     collator.setCaseSensitivity(Qt::CaseInsensitive);
@@ -215,15 +295,27 @@ void scanFolder(QPromise<QList<VideoInfo>> &promise, const QString &root, bool e
     QList<VideoInfo> batch;
     QElapsedTimer sinceReport;
     bool reported = false;
-    QStringList stack{root};
+    QStringList stack{start};
     while (!stack.isEmpty()) {
         const QString dir = stack.takeLast();
         const QDir here(dir);
-        // Links to folders aren't followed.
+        const QFileInfoList files = here.entryInfoList(QDir::Files);
+        // Hidden folders are looked in too: copied Documents folders keep the old "My Pictures"
+        // and "My Music" as hidden system folders, videos and all. Links to folders (and
+        // junctions) aren't followed.
+        const QFileInfoList folders =
+            here.entryInfoList(QDir::Dirs | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot | QDir::NoSymLinks);
+        const auto named = [](const QFileInfoList &list, auto test) {
+            return std::any_of(list.begin(), list.end(), [&](const QFileInfo &f) { return test(f.fileName()); });
+        };
+        // A code project, and everything in it: not anyone's videos.
+        if (dir != root && (named(files, isProjectFile) || named(folders, isProjectFile)))
+            continue;
+
         if (!isEditorCache(dir)) {
             const QString placeKey = placeKeyOf(dir, root, sourceName);
             QList<VideoInfo> videos;
-            for (const QFileInfo &file : here.entryInfoList(QDir::Files)) {
+            for (const QFileInfo &file : files) {
                 if (!isVideoFile(file))
                     continue;
                 videos.append(fileVideo(file, root, external, driveId, placeKey));
@@ -231,11 +323,15 @@ void scanFolder(QPromise<QList<VideoInfo>> &promise, const QString &root, bool e
             }
             batch += sortedByPath(std::move(videos));
         }
-        // Hidden folders are looked in too: copied Documents folders keep the old "My Pictures"
-        // and "My Music" as hidden system folders, videos and all.
-        QStringList subfolders = here.entryList(QDir::Dirs | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot
-                                                | QDir::NoSymLinks);
-        subfolders.removeIf(isSkippedFolder);
+        QStringList subfolders;
+        if (recursive) {
+            for (const QFileInfo &folder : folders) {
+                const QString name = folder.fileName();
+                if (folder.isJunction() || isSkippedFolder(name) || (dir == root && isDriveRoot(root) && isSystemFolder(name)))
+                    continue;
+                subfolders.append(name);
+            }
+        }
         std::sort(subfolders.begin(), subfolders.end(), [&](const QString &a, const QString &b) {
             return collator.compare(a, b) < 0;
         });
@@ -396,15 +492,11 @@ VideoLibrary::VideoLibrary(QObject *parent)
     m_thumbnailer = new Thumbnailer(this);
     connect(m_thumbnailer, &Thumbnailer::finished, this, &VideoLibrary::onThumbnailFinished);
 
-    // The library folders; the Videos folder until the user picks others.
-    const QSettings settings(m_dataDir + QStringLiteral("/settings.ini"), QSettings::IniFormat);
-    const QStringList folders = settings.contains(kFoldersKey)
-        ? settings.value(kFoldersKey).toStringList()
-        : QStringList{QStandardPaths::writableLocation(QStandardPaths::MoviesLocation)};
-    for (const QString &folder : folders) {
-        VideoSource source;
-        source.path = QDir::cleanPath(QDir::fromNativeSeparators(folder));
-        m_sources.append(source);
+    m_videosFolder = QDir::cleanPath(QStandardPaths::writableLocation(QStandardPaths::MoviesLocation));
+    {
+        // Library folders were chosen in Settings before the library was the whole computer.
+        QSettings settings(m_dataDir + QStringLiteral("/settings.ini"), QSettings::IniFormat);
+        settings.remove(QStringLiteral("library/folders"));
     }
 
     // Home's shelves are about the library, not whatever drive is plugged in.
@@ -442,31 +534,27 @@ VideoLibrary::VideoLibrary(QObject *parent)
         return rows.mid(0, kQuickPicks);
     }, this);
 
-    m_folders = new FolderModel(this, QString(), FolderModel::TopFolders, this);
+    m_folders = new FolderModel(this, QString(), FolderModel::VideoFolders, this);
 
-    scanAll();
-
-    m_driveWatcher = new DriveWatcher(this);
-    connect(m_driveWatcher, &DriveWatcher::drivesChanged, this, &VideoLibrary::onDrivesChanged);
-    onDrivesChanged();
-    // Drives already plugged in at startup aren't announced; ones plugged in later are.
-    for (VideoSource &source : m_sources)
-        source.announce = false;
-
-    // Videos added to (or removed from) a library folder show up without a rescan, a
-    // moment after the last change (copying a film is many changes).
+    // Videos added to (or removed from) the library show up without a rescan, a moment
+    // after the last change (copying a film is many changes).
     m_folderWatcher = new FolderWatcher(this);
-    connect(m_folderWatcher, &FolderWatcher::changed, this, &VideoLibrary::onFolderChanged);
-    connect(m_folderWatcher, &FolderWatcher::removed, this, [this](const QString &folder, const QStringList &paths) {
+    m_folderWatcher->setIgnored(&isSkippedPath);
+    connect(m_folderWatcher, &FolderWatcher::changed, this,
+            [this](const QString &, const QStringList &dirs, const QStringList &trees) {
+        for (const QString &dir : dirs)
+            onFolderChanged(dir, false);
+        for (const QString &tree : trees)
+            onFolderChanged(tree, true);
+    });
+    connect(m_folderWatcher, &FolderWatcher::removed, this, [this](const QString &, const QStringList &paths) {
         for (const QString &path : paths) {
             const QString prefix = withSlash(path);
             const bool hadVideos = std::any_of(m_videos.cbegin(), m_videos.cend(), [&](const VideoInfo &v) {
                 return v.path.startsWith(prefix, Qt::CaseInsensitive);
             });
-            if (hadVideos) {
-                onFolderChanged(folder);
-                return;
-            }
+            if (hadVideos)
+                onFolderChanged(path, true);   // finds nothing there now: they leave
         }
     });
     m_rebuildTimer.setSingleShot(true);
@@ -474,19 +562,40 @@ VideoLibrary::VideoLibrary(QObject *parent)
     m_changeTimer.setSingleShot(true);
     m_changeTimer.setInterval(2000);
     connect(&m_changeTimer, &QTimer::timeout, this, [this] {
-        const QSet<QString> folders = std::exchange(m_changedFolders, {});
-        for (const QString &folder : folders) {
-            const int index = sourceIndex(folder);
+        const QHash<QString, bool> folders = std::exchange(m_changedFolders, {});
+        for (auto it = folders.cbegin(); it != folders.cend(); ++it) {
+            const QString &folder = it.key();
+            // Inside a folder that's being looked through anyway.
+            bool inside = false;
+            for (auto other = folders.cbegin(); other != folders.cend() && !inside; ++other)
+                inside = other.value() && other.key() != folder && folder.startsWith(withSlash(other.key()));
+            if (inside)
+                continue;
+            // The library source it's in.
+            int index = -1;
+            for (int i = 0; i < m_sources.size() && index < 0; ++i)
+                if (!m_sources[i].external && (folder == m_sources[i].path || folder.startsWith(withSlash(m_sources[i].path))))
+                    index = i;
             if (index < 0)
                 continue;
             if (m_sources[index].scanning)
-                onFolderChanged(folder);   // after this scan, look again
-            else
+                onFolderChanged(folder, it.value());   // after this scan, look again
+            else if (folder == m_sources[index].path && it.value())
                 scanSource(folder);
+            else
+                rescanPart(m_sources[index].path, folder, it.value());
         }
     });
-    connect(this, &VideoLibrary::libraryFoldersChanged, this, &VideoLibrary::updateWatchedFolders);
+
+    m_driveWatcher = new DriveWatcher(this);
+    connect(m_driveWatcher, &DriveWatcher::drivesChanged, this, &VideoLibrary::updateLibrarySources);
+    connect(m_driveWatcher, &DriveWatcher::drivesChanged, this, &VideoLibrary::onDrivesChanged);
     connect(m_driveWatcher, &DriveWatcher::drivesChanged, this, &VideoLibrary::updateWatchedFolders);
+    updateLibrarySources();
+    onDrivesChanged();
+    // Drives already plugged in at startup aren't announced; ones plugged in later are.
+    for (VideoSource &source : m_sources)
+        source.announce = false;
     updateWatchedFolders();
 
     m_phoneTimer.setInterval(2000);
@@ -507,24 +616,59 @@ int VideoLibrary::libraryCount() const
     return std::count_if(m_videos.begin(), m_videos.end(), [](const VideoInfo &v) { return !v.external; });
 }
 
-QStringList VideoLibrary::libraryFolders() const
+void VideoLibrary::updateLibrarySources()
 {
-    return libraryRoots();
-}
+    // The computer's own drives; elsewhere, the home folder. And the Videos folder, if it's
+    // somewhere else (a network drive).
+    QList<VideoSource> wanted;
+    const QList<DriveInfo> internal = m_driveWatcher->internalDrives();
+    for (const DriveInfo &drive : internal) {
+        VideoSource source;
+        source.path = drive.rootPath;
+        source.name = drive.name;
+        source.driveId = drive.id;
+        wanted.append(source);
+    }
+    if (wanted.isEmpty()) {
+#ifndef Q_OS_WIN
+        VideoSource home;
+        home.path = QDir::homePath();
+        wanted.append(home);
+#endif
+    }
+    const bool videosInside = std::any_of(wanted.begin(), wanted.end(), [&](const VideoSource &s) {
+        return m_videosFolder.startsWith(withSlash(s.path), Qt::CaseInsensitive);
+    });
+    if (!videosInside && !m_videosFolder.isEmpty()) {
+        VideoSource videos;
+        videos.path = m_videosFolder;
+        wanted.append(videos);
+    }
 
-QStringList VideoLibrary::libraryRoots() const
-{
-    QStringList roots;
-    for (const VideoSource &source : m_sources)
-        if (!source.external)
-            roots.append(source.path);
-    return roots;
-}
-
-QString VideoLibrary::libraryHome() const
-{
-    const QStringList roots = libraryRoots();
-    return roots.size() == 1 ? roots.first() : QString();
+    bool changed = false;
+    for (int i = m_sources.size() - 1; i >= 0; --i) {
+        if (m_sources[i].external)
+            continue;
+        const QString path = m_sources[i].path;
+        if (std::any_of(wanted.begin(), wanted.end(), [&](const VideoSource &s) { return s.path == path; }))
+            continue;
+        m_sources.removeAt(i);
+        m_scanned.remove(path);
+        changed = true;
+    }
+    // In order, ahead of the external drives.
+    for (int position = 0; position < wanted.size(); ++position) {
+        const int index = sourceIndex(wanted[position].path);
+        if (index >= 0) {
+            m_sources[index].name = wanted[position].name;
+            continue;
+        }
+        m_sources.insert(std::min<qsizetype>(position, m_sources.size()), wanted[position]);
+        scanSource(wanted[position].path);
+        changed = true;
+    }
+    if (changed)
+        rebuild();
 }
 
 QVariantList VideoLibrary::drives() const
@@ -728,8 +872,39 @@ void VideoLibrary::scanSource(const QString &path)
     if (source.phone)
         watcher->setFuture(QtConcurrent::run(scanPhone, source.path, source.driveId, sourceName(source.path), source.found));
     else
-        watcher->setFuture(QtConcurrent::run(scanFolder, source.path, source.external, source.driveId,
+        watcher->setFuture(QtConcurrent::run(scanFolder, source.path, source.path, true, source.external, source.driveId,
                                              sourceName(source.path), source.found));
+}
+
+void VideoLibrary::rescanPart(const QString &sourcePath, const QString &folder, bool recursive)
+{
+    const int index = sourceIndex(sourcePath);
+    if (index < 0)
+        return;
+    const VideoSource &source = m_sources[index];
+    auto *watcher = new QFutureWatcher<QList<VideoInfo>>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, sourcePath, folder, recursive] {
+        watcher->deleteLater();
+        if (sourceIndex(sourcePath) < 0)
+            return;   // gone meanwhile
+        QList<VideoInfo> found;
+        for (const QList<VideoInfo> &batch : watcher->future().results())
+            found += batch;
+        // What's there now takes the place of what was.
+        const QString prefix = withSlash(folder);
+        QList<VideoInfo> &videos = m_scanned[sourcePath];
+        const qsizetype before = videos.size();
+        videos.removeIf([&](const VideoInfo &v) {
+            return v.dir == folder || (recursive && v.dir.startsWith(prefix));
+        });
+        if (videos.size() == before && found.isEmpty())
+            return;   // nothing came or went
+        videos += found;
+        m_unsorted.insert(sourcePath);
+        rebuild();
+    });
+    watcher->setFuture(QtConcurrent::run(scanFolder, source.path, folder, recursive, source.external, source.driveId,
+                                         sourceName(source.path), std::make_shared<std::atomic_int>(0)));
 }
 
 void VideoLibrary::onVideosFound(const QString &path, const QList<VideoInfo> &found)
@@ -797,8 +972,6 @@ void VideoLibrary::onScanFinished(const QString &path, QList<VideoInfo> videos)
             emit drivesChanged();
             if (std::exchange(source.announce, false))
                 emit driveConnected(source.name, source.path, found);
-        } else if (std::exchange(source.announce, false)) {
-            emit libraryFolderAdded(folderName(source.path), source.path, found);
         }
     }
     if (m_pendingScans == 0) {
@@ -836,9 +1009,9 @@ void VideoLibrary::updateWatchedFolders()
     m_folderWatcher->setFolders(folders);
 }
 
-void VideoLibrary::onFolderChanged(const QString &folder)
+void VideoLibrary::onFolderChanged(const QString &folder, bool recursive)
 {
-    m_changedFolders.insert(folder);
+    m_changedFolders[folder] |= recursive;
     m_changeTimer.start();   // (again): two seconds after the last change
 }
 
@@ -912,58 +1085,6 @@ void VideoLibrary::ejectDrive(const QString &path)
     watcher->setFuture(QtConcurrent::run(&::ejectDrive, path, kind));
 }
 
-QString VideoLibrary::addLibraryFolder(const QString &input, int at)
-{
-    const QString path = QDir::cleanPath(QDir::fromNativeSeparators(input));
-    if (path.isEmpty() || !QFileInfo(path).isDir())
-        return tr("That folder can't be opened.");
-
-    for (const VideoSource &source : std::as_const(m_sources)) {
-        if (source.external)
-            continue;
-        if (source.path == path)
-            return tr("That folder is already in your library.");
-        if (path.startsWith(withSlash(source.path)))
-            return tr("That folder is already in your library, inside %1.").arg(QDir::toNativeSeparators(source.path));
-    }
-
-    // A parent folder takes the place of library folders inside it.
-    int position = 0;
-    for (int i = m_sources.size() - 1; i >= 0; --i) {
-        if (!m_sources[i].external && m_sources[i].path.startsWith(withSlash(path))) {
-            m_scanned.remove(m_sources[i].path);
-            m_sources.removeAt(i);
-        }
-    }
-    while (position < m_sources.size() && !m_sources[position].external)
-        ++position;
-    if (at >= 0 && at < position)
-        position = at;
-
-    VideoSource source;
-    source.path = path;
-    source.announce = true;
-    m_sources.insert(position, source);
-    saveLibraryFolders();
-    emit libraryFoldersChanged();
-    rebuild();
-    scanSource(path);
-    return {};
-}
-
-int VideoLibrary::removeLibraryFolder(const QString &path)
-{
-    const int index = sourceIndex(path);
-    if (index < 0 || m_sources[index].external)
-        return -1;
-    m_sources.removeAt(index);
-    m_scanned.remove(path);
-    saveLibraryFolders();
-    emit libraryFoldersChanged();
-    rebuild();
-    return index;   // library folders come first, so this is also their position
-}
-
 void VideoLibrary::scheduleRebuild()
 {
     constexpr qint64 interval = 2000;   // ms
@@ -991,7 +1112,7 @@ void VideoLibrary::rebuild()
     m_byPath.clear();
     for (const VideoSource &source : std::as_const(m_sources)) {
         for (const VideoInfo &found : m_scanned.value(source.path)) {
-            // A library folder on a drive is listed under the library, not the drive.
+            // The Videos folder on an external drive is listed under the library, not the drive.
             if (m_byPath.contains(found.path))
                 continue;
             VideoInfo v = found;
@@ -1046,7 +1167,7 @@ void VideoLibrary::queueThumbnails()
                 order.append(i);
                 continue;
             }
-            // The sub-folder it's under: a library folder for "", otherwise the next folder down.
+            // The sub-folder it's under: a drive for "", otherwise the next folder down.
             const QString sub = m_priorityFolder.isEmpty() ? v.root : v.dir.mid(prefix.size()).section(QLatin1Char('/'), 0, 0);
             (covered.contains(sub) ? deeper : covers).append(i);
             covered.insert(sub);
@@ -1075,6 +1196,9 @@ void VideoLibrary::queueThumbnails()
             continue;
         const VideoInfo &v = m_videos[i];
         if (v.phone && v.objectId.isEmpty() && scanningPhones.contains(v.root))
+            continue;
+        // Reading it would download it.
+        if (v.onlineOnly)
             continue;
         const VideoMeta meta = m_metadata.value(v.cacheKey);
         // Looked at again when the cache is from before sizes were kept.
@@ -1306,8 +1430,17 @@ int VideoLibrary::videoCountIn(const QString &folder) const
 
 QString VideoLibrary::locationOf(const VideoInfo &video) const
 {
-    const QString relative = video.dir == video.root ? QString() : video.dir.mid(withSlash(video.root).size());
-    return folderLabel(relative, sourceName(video.root));
+    // On the computer's own drives, where it is in the user's folder ("Season 2 · Videos"),
+    // not "Season 2 · Users".
+    static const QString home = QDir::homePath();
+    QString root = video.root;
+    QString rootName = sourceName(video.root);
+    if (!video.external && video.dir.startsWith(withSlash(home), Qt::CaseInsensitive)) {
+        root = home;
+        rootName = QDir(home).dirName();
+    }
+    const QString relative = video.dir.size() <= root.size() ? QString() : video.dir.mid(withSlash(root).size());
+    return folderLabel(relative, rootName);
 }
 
 QString VideoLibrary::titleOf(const QString &path) const
@@ -1628,7 +1761,7 @@ void VideoLibrary::relocate(const QString &oldPath, const QString &newPath)
     const VideoInfo old = m_videos[index];
     forgetScanned(oldPath);
 
-    // Where it is now: a library folder (first, as in rebuild()) or a drive, if any.
+    // Where it is now: one of the library's sources (first, as in rebuild()) or a drive, if any.
     QString newKey = newPath;
     QString newCacheKey;
     for (const VideoSource &source : std::as_const(m_sources)) {
@@ -1911,12 +2044,6 @@ QString VideoLibrary::sourceName(const QString &path) const
 QString VideoLibrary::thumbnailFile(const VideoInfo &video) const
 {
     return m_dataDir + QStringLiteral("/thumbnails/") + video.cacheKey + QStringLiteral(".jpg");
-}
-
-void VideoLibrary::saveLibraryFolders()
-{
-    QSettings settings(m_dataDir + QStringLiteral("/settings.ini"), QSettings::IniFormat);
-    settings.setValue(kFoldersKey, libraryRoots());
 }
 
 void VideoLibrary::loadState()

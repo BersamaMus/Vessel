@@ -101,9 +101,9 @@ ApplicationWindow {
             return;
         }
         let scope = "library";
-        if (rail.currentIndex === 2)
+        if (rail.currentIndex === 3)
             scope = VideoLibrary.driveOf(current.folder ?? "") || "drives";
-        else if (rail.currentIndex === 3)
+        else if (rail.currentIndex === 4)
             scope = VideoLibrary.driveOf(current.folder ?? "") || "phones";
         contentStack.push(searchPage, { scope: scope });
     }
@@ -127,21 +127,21 @@ ApplicationWindow {
         settings.recentSearches = JSON.stringify(recentSearches.filter(s => s !== text));
     }
 
-    // 0 Home, 1 Library, 2 External, 3 Phone, 4 Settings, as in the rail.
+    // 0 Home, 1 Videos, 2 Library, 3 External, 4 Phone, 5 Settings, as in the rail.
     function showTab(index) {
         rail.currentIndex = index;
-        contentStack.replace(null, [homePage, libraryPage, externalPage, phonePage, settingsPage][index]);
+        contentStack.replace(null, [homePage, videosPage, libraryPage, externalPage, phonePage, settingsPage][index]);
     }
 
     function showLibrary() {
-        showTab(1);
+        showTab(2);
     }
 
     // A drive's (or phone's) videos, from the "connected" notice, or one of its folders.
     function openDrive(path) {
         if (watch.mode === "watch" || watch.mode === "full")
             watch.minimize();
-        showTab(VideoLibrary.isPhone(path) ? 3 : 2);
+        showTab(VideoLibrary.isPhone(path) ? 4 : 3);
         openFolder(path);
     }
 
@@ -153,14 +153,6 @@ ApplicationWindow {
     function rescanLibrary() {
         toast(qsTr("Looking for videos…"), { busy: true });
         VideoLibrary.rescan();
-    }
-
-    // Removing a library folder can be undone from the notice.
-    function removeLibraryFolder(path) {
-        const name = VideoLibrary.folderName(path);
-        const position = VideoLibrary.removeLibraryFolder(path);
-        toast(qsTr("Removed %1 from your library").arg(name),
-              { icon: "folder", actionText: qsTr("Undo"), action: () => VideoLibrary.addLibraryFolder(path, position), duration: 8000 });
     }
 
     function openFileDialog() {
@@ -420,10 +412,16 @@ ApplicationWindow {
         HomePage {}
     }
     Component {
+        id: videosPage
+        FolderPage {
+            tab: "videos"
+            folder: VideoLibrary.videosFolder
+        }
+    }
+    Component {
         id: libraryPage
         FolderPage {
-            isLibraryTab: true
-            folder: VideoLibrary.libraryHome
+            tab: "library"
         }
     }
     Component {
@@ -630,10 +628,6 @@ ApplicationWindow {
                              { icon: "smartphone" });
         }
 
-        function onLibraryFolderAdded(name, path, count) {
-            window.toast(qsTr("%1 added to your library  •  %2").arg(name)
-                         .arg(count === 1 ? qsTr("1 video") : qsTr("%1 videos").arg(count)), { icon: "folder" });
-        }
     }
 
     // "Close Vessel?" while a video is playing.
@@ -721,7 +715,6 @@ ApplicationWindow {
         property string folder
         readonly property bool phone: VideoLibrary.isPhone(folder)
         readonly property bool hasVideos: folder !== "" && VideoLibrary.count >= 0 && VideoLibrary.videoCountIn(folder) > 0
-        readonly property bool libraryFolder: VideoLibrary.libraryFolders.includes(folder)
         // A connected drive's own card (not a phone): it can be ejected.
         readonly property bool drive: Qt.platform.os === "windows" && VideoLibrary.drives.some(d => d.path === folder)
 
@@ -751,13 +744,8 @@ ApplicationWindow {
             onTriggered: VideoLibrary.showInFileManager(folderMenu.folder)
         }
         MenuLine {
-            visible: folderMenu.libraryFolder || folderMenu.drive
+            visible: folderMenu.drive
             height: visible ? implicitHeight : 0
-        }
-        FolderMenuItem {
-            visible: folderMenu.libraryFolder
-            text: qsTr("Remove from library")
-            onTriggered: window.removeLibraryFolder(folderMenu.folder)
         }
         FolderMenuItem {
             visible: folderMenu.drive

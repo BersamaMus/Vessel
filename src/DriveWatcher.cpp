@@ -72,7 +72,7 @@ void DriveWatcher::poll()
     if (current == m_signature)
         return;
     m_signature = current;
-    m_drives = enumerate();
+    enumerate();
     emit drivesChanged();
 }
 
@@ -100,18 +100,21 @@ QString DriveWatcher::signature() const
     return result;
 }
 
-QList<DriveInfo> DriveWatcher::enumerate() const
+void DriveWatcher::enumerate()
 {
     QList<DriveInfo> drives;
+    QList<DriveInfo> internal;
     const QString systemRoot = QStorageInfo::root().rootPath();
 
     const auto add = [&](const QStorageInfo &volume, const QString &kind) {
-        if (!volume.isValid() || !volume.isReady() || volume.rootPath() == systemRoot)
+        const bool own = kind == QLatin1String("internal");
+        if (!volume.isValid() || !volume.isReady() || (!own && volume.rootPath() == systemRoot))
             return;
         DriveInfo drive;
         drive.rootPath = volume.rootPath();
         const QString label = volume.name();
-        const QString fallback = kind == QLatin1String("card") ? tr("Memory card") : tr("USB drive");
+        const QString fallback = own ? tr("Local Disk")
+                               : kind == QLatin1String("card") ? tr("Memory card") : tr("USB drive");
 #ifdef Q_OS_WIN
         drive.name = QStringLiteral("%1 (%2)").arg(label.isEmpty() ? fallback : label, drive.rootPath.left(2));
 #else
@@ -122,7 +125,12 @@ QList<DriveInfo> DriveWatcher::enumerate() const
         drive.kind = kind;
         drive.bytesTotal = volume.bytesTotal();
         drive.bytesFree = volume.bytesAvailable();
-        drives.append(drive);
+        if (!own)
+            drives.append(drive);
+        else if (drive.rootPath == systemRoot)
+            internal.prepend(drive);
+        else
+            internal.append(drive);
     };
 
 #ifdef Q_OS_WIN
@@ -138,8 +146,8 @@ QList<DriveInfo> DriveWatcher::enumerate() const
         QString kind = busKind(letter);
         if (kind.isEmpty() && type == DRIVE_REMOVABLE)
             kind = QStringLiteral("usb");
-        if (!kind.isEmpty())   // empty means an internal disk
-            add(QStorageInfo(QString::fromWCharArray(root.c_str())), kind);
+        // No bus kind: a disk inside the computer.
+        add(QStorageInfo(QString::fromWCharArray(root.c_str())), kind.isEmpty() ? QStringLiteral("internal") : kind);
     }
 #else
     for (const QStorageInfo &volume : QStorageInfo::mountedVolumes()) {
@@ -149,5 +157,6 @@ QList<DriveInfo> DriveWatcher::enumerate() const
             add(volume, QStringLiteral("usb"));
     }
 #endif
-    return drives;
+    m_drives = drives;
+    m_internal = internal;
 }

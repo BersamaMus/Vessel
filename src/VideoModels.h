@@ -166,7 +166,7 @@ private:
 };
 
 // Folders, each with a cover thumbnail: the sub-folders of a folder (for "",
-// the library folders themselves), or the top folders of every library folder.
+// the library's drives), or every folder in the library with videos of its own.
 class FolderModel : public QAbstractListModel
 {
     Q_OBJECT
@@ -185,7 +185,7 @@ public:
         ThumbnailPendingRole,   // the cover is still to be made
     };
 
-    enum Mode { Children, TopFolders };
+    enum Mode { Children, VideoFolders };
 
     FolderModel(VideoLibrary *library, const QString &parentFolder, Mode mode, QObject *parent = nullptr);
 
