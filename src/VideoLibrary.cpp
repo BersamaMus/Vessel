@@ -78,6 +78,15 @@ bool isEditorCache(const QString &folder)
     return folder.contains(QLatin1String("/Adobe Premiere Pro Video Previews"), Qt::CaseInsensitive);
 }
 
+// Windows' own folders, never anyone's videos: the recycle bin (deleted videos would come
+// back), System Volume Information, and apps' data and caches in a user's AppData.
+bool isSkippedFolder(const QString &name)
+{
+    return name.compare(QLatin1String("$RECYCLE.BIN"), Qt::CaseInsensitive) == 0
+        || name.compare(QLatin1String("System Volume Information"), Qt::CaseInsensitive) == 0
+        || name.compare(QLatin1String("AppData"), Qt::CaseInsensitive) == 0;
+}
+
 // "Spider-Man Homecoming (2017)" -> "spidermanhomecoming2017", so names that only
 // differ in case, spacing or punctuation compare equal.
 QString normalizedName(const QString &name)
@@ -210,8 +219,7 @@ void scanFolder(QPromise<QList<VideoInfo>> &promise, const QString &root, bool e
     while (!stack.isEmpty()) {
         const QString dir = stack.takeLast();
         const QDir here(dir);
-        // Hidden and system folders (the recycle bin, System Volume Information) are skipped,
-        // and links to folders aren't followed.
+        // Links to folders aren't followed.
         if (!isEditorCache(dir)) {
             const QString placeKey = placeKeyOf(dir, root, sourceName);
             QList<VideoInfo> videos;
@@ -223,7 +231,11 @@ void scanFolder(QPromise<QList<VideoInfo>> &promise, const QString &root, bool e
             }
             batch += sortedByPath(std::move(videos));
         }
-        QStringList subfolders = here.entryList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks);
+        // Hidden folders are looked in too: copied Documents folders keep the old "My Pictures"
+        // and "My Music" as hidden system folders, videos and all.
+        QStringList subfolders = here.entryList(QDir::Dirs | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot
+                                                | QDir::NoSymLinks);
+        subfolders.removeIf(isSkippedFolder);
         std::sort(subfolders.begin(), subfolders.end(), [&](const QString &a, const QString &b) {
             return collator.compare(a, b) < 0;
         });
