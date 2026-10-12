@@ -3,7 +3,7 @@
 #include <QString>
 #include <QStringList>
 
-// Which files are videos, by extension: one list for library folders, drives, phones and
+// Which files are videos, by extension: one list for the library, drives, phones and
 // the Open dialog. libmpv (FFmpeg) plays far more than this; these are the extensions
 // people's videos come with. Left out on purpose besides rarities: .mod (also tracker
 // music), .ogg (almost always audio), .m4p (DRM-locked).

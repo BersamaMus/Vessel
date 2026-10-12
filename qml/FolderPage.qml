@@ -11,13 +11,15 @@ import QtQuick.Layouts
 Item {
     id: page
 
-    // An absolute path, or "" for the whole library (a card per library folder).
+    // An absolute path, or "" for the whole library.
     property string folder: ""
-    // The Library tab: the library folder (or all of them) under the name "Library".
-    property bool isLibraryTab: false
+    // A tab's own page, under the tab's name: "videos" (the Videos folder) or "library" (every
+    // folder with videos in it, on the computer's own drives); "" for any other folder.
+    property string tab: ""
+    readonly property string tabTitle: tab === "videos" ? qsTr("Videos") : tab === "library" ? qsTr("Library") : ""
 
     readonly property var app: ApplicationWindow.window
-    readonly property var subfolders: VideoLibrary.foldersIn(folder)
+    readonly property var subfolders: tab === "library" ? VideoLibrary.folders : VideoLibrary.foldersIn(folder)
     readonly property var videos: VideoLibrary.videosIn(folder)
     // A drive's own page leads with what was being watched on it (drive videos stay off Home).
     readonly property var started: VideoLibrary.isDrive(folder) ? VideoLibrary.continueWatchingOn(folder) : null
@@ -36,7 +38,7 @@ Item {
     // everything in the folder and the folders inside it.
     function playAll(shuffle) {
         const paths = flat ? results.paths() : VideoLibrary.videoPathsIn(folder);
-        app.playAll(paths, isLibraryTab ? qsTr("Library") : VideoLibrary.folderName(folder), shuffle);
+        app.playAll(paths, tabTitle || VideoLibrary.folderName(folder), shuffle);
     }
 
     clip: true
@@ -85,7 +87,7 @@ Item {
                     spacing: 0
 
                     PageTitle {
-                        title: page.isLibraryTab ? qsTr("Library") : VideoLibrary.folderName(page.folder)
+                        title: page.tabTitle || VideoLibrary.folderName(page.folder)
                         subtitle: page.videoCount === 1 ? qsTr("1 video") : qsTr("%1 videos").arg(page.videoCount)
                     }
                     WorkProgress {
@@ -122,14 +124,14 @@ Item {
                     onClicked: page.app.ejectDrive(page.folder)
                 }
                 IconButton {
-                    visible: !page.isLibraryTab
+                    visible: page.tab === ""
                     Layout.alignment: Qt.AlignTop
                     iconName: "search"
                     tip: qsTr("Search (Ctrl+F)")
                     onClicked: page.app.openSearch()
                 }
                 AppActions {
-                    visible: page.isLibraryTab
+                    visible: page.tab !== ""
                 }
             }
 
@@ -190,10 +192,11 @@ Item {
                     visible: !page.flat && page.subfolders.count === 0 && page.videos.count === 0 && !VideoLibrary.scanning
                     Layout.topMargin: 12
                     iconName: "folder"
-                    text: page.isLibraryTab ? qsTr("No videos in your library yet. Add folders in Settings.")
-                                            : qsTr("No videos in this folder.")
-                    actionText: page.isLibraryTab ? qsTr("Open Settings") : ""
-                    onActionTriggered: page.app.showTab(4)
+                    text: page.tab === "library" ? qsTr("No videos found on this computer.")
+                        : page.tab === "videos" ? qsTr("No videos in your Videos folder. Videos elsewhere on this computer are in the Library.")
+                        : qsTr("No videos in this folder.")
+                    actionText: page.tab === "library" ? qsTr("Rescan") : page.tab === "videos" ? qsTr("Open Library") : ""
+                    onActionTriggered: page.tab === "library" ? page.app.rescanLibrary() : page.app.showLibrary()
                 }
 
                 // --- Sorted or filtered ------------------------------------------

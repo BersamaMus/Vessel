@@ -49,10 +49,10 @@ Item {
                 Layout.topMargin: 24
                 iconName: "movie"
                 text: VideoLibrary.scanning
-                      ? qsTr("Looking for videos in your library folders…")
-                      : qsTr("No videos found in your library folders. Choose which folders to use in Settings.")
-                actionText: VideoLibrary.scanning ? "" : qsTr("Open Settings")
-                onActionTriggered: page.app.showTab(4)
+                      ? qsTr("Looking for videos on this computer…")
+                      : qsTr("No videos found on this computer.")
+                actionText: VideoLibrary.scanning ? "" : qsTr("Rescan")
+                onActionTriggered: page.app.rescanLibrary()
             }
 
             // --- Continue watching -------------------------------------------
