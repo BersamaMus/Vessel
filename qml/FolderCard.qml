@@ -1,17 +1,22 @@
 import QtQuick
 import QtQuick.Controls.Basic
 
-// A folder shown as a small stack of thumbnails, with its name and size.
+// A folder (or playlist) shown as a small stack of thumbnails, with its name and size.
 AbstractButton {
     id: card
 
-    // The folder's path: right-clicking opens its menu (see Main.showFolderMenu).
+    // The folder's path: right-clicking opens its menu (see Main.showFolderMenu). Without
+    // one (a playlist), right-clicking asks for a menu with menuRequested().
     property string folder
     property string name
     property string countText
     property url thumbnail
     // The cover is still being made.
     property bool loading: false
+    // Shown in the corner, and in place of a missing cover.
+    property string iconName: "folder"
+
+    signal menuRequested()
 
     hoverEnabled: true
     focusPolicy: Qt.NoFocus
@@ -22,8 +27,12 @@ AbstractButton {
     HoverHandler { cursorShape: Qt.PointingHandCursor }
     TapHandler {
         acceptedButtons: Qt.RightButton
-        enabled: card.folder !== ""
-        onTapped: card.ApplicationWindow.window.showFolderMenu(card.folder)
+        onTapped: {
+            if (card.folder !== "")
+                card.ApplicationWindow.window.showFolderMenu(card.folder);
+            else
+                card.menuRequested();
+        }
     }
 
     background: null
@@ -65,7 +74,7 @@ AbstractButton {
                     anchors.fill: parent
                     source: card.thumbnail
                     loading: card.loading
-                    placeholderIcon: "folder"
+                    placeholderIcon: card.iconName
                 }
 
                 Rectangle {
@@ -78,7 +87,7 @@ AbstractButton {
                     color: Theme.badge
                     Icon {
                         anchors.centerIn: parent
-                        name: "folder"
+                        name: card.iconName
                         size: 18
                         color: Theme.accent
                     }

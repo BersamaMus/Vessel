@@ -3,3 +3,4 @@ third_party/mpv/
 CMakeUserPresets.json
 .vs/
 *.user
+.idea/

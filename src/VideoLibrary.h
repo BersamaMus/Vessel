@@ -75,6 +75,18 @@ struct VideoMeta
     bool probed = false;   // looked at since sizes were kept (older caches lack them)
 };
 
+// A list of videos the user made (playlists.json). Its videos are kept by key (see
+// VideoInfo::key), so one on a drive that's unplugged stays in it, left out of what's
+// shown until the drive is back.
+struct Playlist
+{
+    QString id;
+    QString name;
+    qint64 created = 0;    // ms since epoch
+    qint64 updated = 0;    // when a video was last added: the most recent come first
+    QStringList keys;
+};
+
 // Where videos come from: one of the computer's own drives (the library), a connected
 // external drive, or a phone (also external; its path is "mtp://<serial>").
 struct VideoSource
@@ -128,6 +140,10 @@ class VideoLibrary : public QObject
     // Every video watched (finished or not) that's here now, most recent first; its detail
     // is the day it was watched ("Today", "Yesterday", "12 Oct 2026").
     Q_PROPERTY(VideoModel *history READ history CONSTANT)
+    // The user's playlists, most recently added to first.
+    Q_PROPERTY(PlaylistModel *playlists READ playlists CONSTANT)
+    // Goes up whenever a playlist changes, for bindings on playlistName() and the like.
+    Q_PROPERTY(int playlistRevision READ playlistRevision NOTIFY playlistsChanged)
     // Set by the player while a phone's video is open: that phone's thumbnails wait meanwhile.
     Q_PROPERTY(bool phonePlaying READ phonePlaying WRITE setPhonePlaying NOTIFY phonePlayingChanged)
 
@@ -151,6 +167,8 @@ public:
     VideoModel *recentlyAdded() const { return m_recentlyAdded; }
     VideoModel *quickPicks() const { return m_quickPicks; }
     FolderModel *folders() const { return m_folders; }
+    PlaylistModel *playlists() const { return m_playlistModel; }
+    int playlistRevision() const { return m_playlistRevision; }
 
     // Looks for new and removed videos; rescanFinished() reports what changed.
     Q_INVOKABLE void rescan();
@@ -248,6 +266,27 @@ public:
     // These videos, in this order (Play all, Shuffle); ones no longer here drop out.
     Q_INVOKABLE VideoModel *videosAt(const QStringList &paths);
 
+    // --- Playlists --------------------------------------------------------------------
+    // A new playlist, with these videos in it (or none yet). Returns its id.
+    Q_INVOKABLE QString createPlaylist(const QString &name, const QStringList &paths = {});
+    Q_INVOKABLE void renamePlaylist(const QString &id, const QString &name);
+    Q_INVOKABLE void deletePlaylist(const QString &id);
+    // "" if there's no such playlist (it was deleted).
+    Q_INVOKABLE QString playlistName(const QString &id) const;
+    // Adds a video at the end, or at `at` in the whole list (unplugged drives' videos
+    // included, as removeFromPlaylist() gave it). False if it's in the playlist already.
+    Q_INVOKABLE bool addToPlaylist(const QString &id, const QString &path, int at = -1);
+    // Takes it out. Returns where it was, to put it back with addToPlaylist(), or -1.
+    Q_INVOKABLE int removeFromPlaylist(const QString &id, const QString &path);
+    // Moves a video to just before `before` (another video in it), or to the end for "".
+    Q_INVOKABLE void moveInPlaylist(const QString &id, const QString &path, const QString &before);
+    // The ids of the playlists a video is in.
+    Q_INVOKABLE QStringList playlistsWith(const QString &path) const;
+    // A playlist's videos that are here now, in its order: as a list model, and their
+    // paths (for Play all).
+    Q_INVOKABLE VideoModel *playlistVideos(const QString &id);
+    Q_INVOKABLE QStringList playlistPaths(const QString &id) const;
+
     // --- Drives ---------------------------------------------------------------------
     // Asks Windows to let go of the drive so it can be unplugged safely. Works in the
     // background; on success the drive leaves (driveRemoved with `ejected`), otherwise
@@ -263,6 +302,9 @@ public:
     void track(VideoModel *model);
     // "Season 2 · House MD…": where a video is, for subtitles.
     QString locationOf(const VideoInfo &video) const;
+    const QList<Playlist> &playlistList() const { return m_playlists; }
+    // The library indexes of a playlist's videos that are here now, in its order.
+    QList<int> playlistIndexes(const Playlist &playlist) const;
 
 signals:
     void scanningChanged();
@@ -284,6 +326,8 @@ signals:
     void phoneFileShown(const QString &path, bool shown);
     // A move asked for with moveVideo() is done: `error` is "" if it worked.
     void videoMoved(const QString &oldPath, const QString &newPath, const QString &error);
+    // A playlist was made, renamed, deleted, or had videos added, taken out or moved.
+    void playlistsChanged();
 
 private:
     void scanAll();
@@ -323,6 +367,11 @@ private:
     void editHistory(const QString &path, const std::function<void(QJsonObject &)> &change);
     // Started, unfinished videos on a drive, or in the library for "".
     QList<int> startedIn(const QString &drivePath) const;
+    Playlist *findPlaylist(const QString &id);
+    const Playlist *findPlaylist(const QString &id) const;
+    // After a playlist changed: saved, and its lists shown afresh.
+    void playlistsEdited();
+    void refreshPlaylists();
     int sourceIndex(const QString &path) const;
     QString sourceName(const QString &path) const;
     QString keyFor(const QString &path) const;
@@ -354,12 +403,16 @@ private:
 
     QList<VideoInfo> m_videos;
     QHash<QString, int> m_byPath;
+    QHash<QString, int> m_byKey;   // video key -> index, for playlists
     quint32 m_pickSeed = 0;
 
     QHash<QString, VideoMeta> m_metadata;   // by cache key
     QSet<QString> m_thumbFiles;             // cache keys with a thumbnail file on disk
     bool m_metadataChanged = false;         // since it was last saved
     QJsonObject m_history;    // video key -> {position, duration, watchedAt, finished}
+    QList<Playlist> m_playlists;   // most recently added to first
+    bool m_playlistsChanged = false;   // since they were last saved
+    int m_playlistRevision = 0;
     QTimer m_saveTimer;
 
     DriveWatcher *m_driveWatcher = nullptr;
@@ -380,6 +433,8 @@ private:
     VideoModel *m_recentlyAdded = nullptr;
     VideoModel *m_quickPicks = nullptr;
     FolderModel *m_folders = nullptr;
+    PlaylistModel *m_playlistModel = nullptr;
+    QList<QPointer<VideoModel>> m_playlistVideoModels;   // also refreshed as playlists change
     QList<QPointer<VideoModel>> m_folderVideoModels;
     QList<QPointer<VideoModel>> m_driveContinueModels;   // also refreshed as progress is saved
     QList<QPointer<FolderModel>> m_folderModels;

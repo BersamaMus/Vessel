@@ -26,6 +26,7 @@
 #include <QSet>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QUuid>
 #include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
@@ -535,6 +536,7 @@ VideoLibrary::VideoLibrary(QObject *parent)
     }, this);
 
     m_folders = new FolderModel(this, QString(), FolderModel::VideoFolders, this);
+    m_playlistModel = new PlaylistModel(this, this);
 
     // Videos added to (or removed from) the library show up without a rescan, a moment
     // after the last change (copying a film is many changes).
@@ -1110,6 +1112,7 @@ void VideoLibrary::rebuild()
     }
     m_videos.clear();
     m_byPath.clear();
+    m_byKey.clear();
     for (const VideoSource &source : std::as_const(m_sources)) {
         for (const VideoInfo &found : m_scanned.value(source.path)) {
             // The Videos folder on an external drive is listed under the library, not the drive.
@@ -1133,6 +1136,7 @@ void VideoLibrary::rebuild()
                     v.duration = seen.value(QStringLiteral("duration")).toDouble();
             }
             m_byPath.insert(v.path, m_videos.size());
+            m_byKey.insert(v.key, m_videos.size());
             m_videos.append(v);
         }
     }
@@ -1304,6 +1308,7 @@ void VideoLibrary::refreshModels()
     for (const auto &model : std::as_const(m_folderModels))
         if (model)
             model->refresh();
+    refreshPlaylists();
 }
 
 void VideoLibrary::reshuffleQuickPicks()
@@ -1345,6 +1350,149 @@ VideoModel *VideoLibrary::videosAt(const QStringList &paths)
     m_folderVideoModels.removeAll(nullptr);
     m_folderVideoModels.append(model);
     return model;   // owned by QML (no parent)
+}
+
+// --- Playlists --------------------------------------------------------------------------
+
+Playlist *VideoLibrary::findPlaylist(const QString &id)
+{
+    for (Playlist &playlist : m_playlists)
+        if (playlist.id == id)
+            return &playlist;
+    return nullptr;
+}
+
+const Playlist *VideoLibrary::findPlaylist(const QString &id) const
+{
+    return const_cast<VideoLibrary *>(this)->findPlaylist(id);
+}
+
+QList<int> VideoLibrary::playlistIndexes(const Playlist &playlist) const
+{
+    QList<int> rows;
+    for (const QString &key : playlist.keys)
+        if (const int index = m_byKey.value(key, -1); index >= 0)
+            rows.append(index);
+    return rows;
+}
+
+void VideoLibrary::refreshPlaylists()
+{
+    m_playlistModel->refresh();
+    m_playlistVideoModels.removeAll(nullptr);
+    for (const auto &model : std::as_const(m_playlistVideoModels))
+        model->refresh();
+}
+
+void VideoLibrary::playlistsEdited()
+{
+    m_playlistsChanged = true;
+    scheduleSave();
+    ++m_playlistRevision;
+    refreshPlaylists();
+    emit playlistsChanged();
+}
+
+QString VideoLibrary::createPlaylist(const QString &name, const QStringList &paths)
+{
+    Playlist playlist;
+    playlist.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    playlist.name = name.trimmed().isEmpty() ? tr("New playlist") : name.trimmed();
+    playlist.created = playlist.updated = QDateTime::currentMSecsSinceEpoch();
+    for (const QString &path : paths)
+        if (const QString key = keyFor(path); !playlist.keys.contains(key))
+            playlist.keys.append(key);
+    m_playlists.prepend(playlist);
+    playlistsEdited();
+    return playlist.id;
+}
+
+void VideoLibrary::renamePlaylist(const QString &id, const QString &name)
+{
+    Playlist *playlist = findPlaylist(id);
+    if (!playlist || name.trimmed().isEmpty() || playlist->name == name.trimmed())
+        return;
+    playlist->name = name.trimmed();
+    playlistsEdited();
+}
+
+void VideoLibrary::deletePlaylist(const QString &id)
+{
+    if (m_playlists.removeIf([&](const Playlist &playlist) { return playlist.id == id; }) > 0)
+        playlistsEdited();
+}
+
+QString VideoLibrary::playlistName(const QString &id) const
+{
+    const Playlist *playlist = findPlaylist(id);
+    return playlist ? playlist->name : QString();
+}
+
+bool VideoLibrary::addToPlaylist(const QString &id, const QString &path, int at)
+{
+    Playlist *playlist = findPlaylist(id);
+    const QString key = keyFor(path);
+    if (!playlist || playlist->keys.contains(key))
+        return false;
+    playlist->keys.insert(at >= 0 && at <= playlist->keys.size() ? at : playlist->keys.size(), key);
+    playlist->updated = QDateTime::currentMSecsSinceEpoch();
+    // Most recently added to first, as in the Save to playlist list.
+    const qsizetype from = playlist - m_playlists.data();
+    m_playlists.move(from, 0);
+    playlistsEdited();
+    return true;
+}
+
+int VideoLibrary::removeFromPlaylist(const QString &id, const QString &path)
+{
+    Playlist *playlist = findPlaylist(id);
+    const int at = playlist ? int(playlist->keys.indexOf(keyFor(path))) : -1;
+    if (at < 0)
+        return -1;
+    playlist->keys.removeAt(at);
+    playlistsEdited();
+    return at;
+}
+
+void VideoLibrary::moveInPlaylist(const QString &id, const QString &path, const QString &before)
+{
+    Playlist *playlist = findPlaylist(id);
+    const QString key = keyFor(path);
+    if (!playlist || !playlist->keys.removeOne(key))
+        return;
+    const qsizetype at = before.isEmpty() ? -1 : playlist->keys.indexOf(keyFor(before));
+    playlist->keys.insert(at >= 0 ? at : playlist->keys.size(), key);
+    playlistsEdited();
+}
+
+QStringList VideoLibrary::playlistsWith(const QString &path) const
+{
+    const QString key = keyFor(path);
+    QStringList ids;
+    for (const Playlist &playlist : m_playlists)
+        if (playlist.keys.contains(key))
+            ids.append(playlist.id);
+    return ids;
+}
+
+VideoModel *VideoLibrary::playlistVideos(const QString &id)
+{
+    auto *model = new VideoModel(this, [this, id] {
+        const Playlist *playlist = findPlaylist(id);
+        return playlist ? playlistIndexes(*playlist) : QList<int>();
+    });
+    m_playlistVideoModels.removeAll(nullptr);
+    m_playlistVideoModels.append(model);
+    return model;   // owned by QML (no parent)
+}
+
+QStringList VideoLibrary::playlistPaths(const QString &id) const
+{
+    QStringList paths;
+    if (const Playlist *playlist = findPlaylist(id))
+        for (const int index : playlistIndexes(*playlist))
+            paths.append(m_videos[index].path);
+    return paths;
 }
 
 QList<int> VideoLibrary::startedIn(const QString &drivePath) const
@@ -1741,6 +1889,15 @@ QString VideoLibrary::deleteVideo(const QString &path)
         const VideoInfo v = m_videos[index];
         forgetScanned(path);
         m_history.remove(v.key);
+        // It leaves its playlists too.
+        bool inPlaylists = false;
+        for (Playlist &playlist : m_playlists)
+            inPlaylists |= playlist.keys.removeAll(v.key) > 0;
+        if (inPlaylists) {
+            m_playlistsChanged = true;
+            ++m_playlistRevision;
+            emit playlistsChanged();
+        }
         scheduleSave();
         rebuild();
     }
@@ -1790,6 +1947,20 @@ void VideoLibrary::relocate(const QString &oldPath, const QString &newPath)
                 entry.insert(QStringLiteral("subtitle"), followed);
         }
         m_history.insert(newKey, entry);
+    }
+    // Its places in playlists.
+    if (newKey != old.key) {
+        for (Playlist &playlist : m_playlists) {
+            const qsizetype at = playlist.keys.indexOf(old.key);
+            if (at >= 0) {
+                // Moved over a copy that's in the playlist already: just the one is kept.
+                if (playlist.keys.contains(newKey))
+                    playlist.keys.removeAt(at);
+                else
+                    playlist.keys[at] = newKey;
+                m_playlistsChanged = true;
+            }
+        }
     }
     // And its thumbnail and details, so they needn't be made again.
     if (!newCacheKey.isEmpty() && newCacheKey != old.cacheKey) {
@@ -2067,6 +2238,20 @@ void VideoLibrary::loadState()
     }
     m_history = readJson(QStringLiteral("history.json"));
 
+    const QJsonArray playlists = readJson(QStringLiteral("playlists.json")).value(QLatin1String("playlists")).toArray();
+    for (const QJsonValue &value : playlists) {
+        const QJsonObject entry = value.toObject();
+        Playlist playlist;
+        playlist.id = entry.value(QLatin1String("id")).toString();
+        playlist.name = entry.value(QLatin1String("name")).toString();
+        playlist.created = entry.value(QLatin1String("created")).toInteger();
+        playlist.updated = entry.value(QLatin1String("updated")).toInteger();
+        for (const QJsonValue &key : entry.value(QLatin1String("videos")).toArray())
+            playlist.keys.append(key.toString());
+        if (!playlist.id.isEmpty())
+            m_playlists.append(playlist);
+    }
+
     // Which thumbnails exist, read once (rather than a file check per video per rebuild).
     const QStringList files = QDir(m_dataDir + QStringLiteral("/thumbnails")).entryList({QStringLiteral("*.jpg")}, QDir::Files);
     m_thumbFiles.reserve(files.size());
@@ -2105,4 +2290,12 @@ void VideoLibrary::save()
         writeJson(QStringLiteral("metadata.json"), metadata);
     }
     writeJson(QStringLiteral("history.json"), m_history);
+    if (std::exchange(m_playlistsChanged, false)) {
+        QJsonArray playlists;
+        for (const Playlist &playlist : std::as_const(m_playlists))
+            playlists.append(QJsonObject{{"id", playlist.id}, {"name", playlist.name},
+                                         {"created", playlist.created}, {"updated", playlist.updated},
+                                         {"videos", QJsonArray::fromStringList(playlist.keys)}});
+        writeJson(QStringLiteral("playlists.json"), QJsonObject{{"playlists", playlists}});
+    }
 }

@@ -118,12 +118,28 @@ what you typed come first, then titles that contain it, then videos whose title 
 contain every word ("house season 2"). It has the same sort and filters, and remembers your
 last few searches.
 
+## Playlists
+
+The **Playlists** tab lists the playlists you've made, the most recently added to first. Save a
+video to one from anywhere: right-click it (on Home, in a folder, in Search, History, or the
+watch page's side list) and choose **Save to playlist…**, or use **Save** beside the title on the
+watch page (also in the player's More menu, for full screen). The dialog ticks the playlists the
+video is in; ticking or unticking one saves it there and then, and a new playlist can be made
+from it with the video already in it.
+
+A playlist's page plays it from the top, shuffled, or from any of its videos on, and each video
+can be moved up or down or taken out (with Undo). Right-click a playlist's card (or More on its
+page) to rename or delete it; deleting one leaves the videos where they are. Videos are kept by
+the same key as the watch history, so they stay in their playlists when renamed or moved in
+Vessel, and a drive's videos come back when it's plugged in again (they're hidden meanwhile).
+
 App data lives in `%LOCALAPPDATA%\Vessel` (moved there from `%LOCALAPPDATA%\BetterVideoPlayer`,
 the app's folder before it was renamed, the first time Vessel runs):
 
 - `thumbnails\`: JPEG thumbnails, named by a hash of path, size and modified time
 - `metadata.json`: durations, sizes and tagged years, and which files could not be thumbnailed
 - `history.json`: how far each video was watched (for Continue watching and resume)
+- `playlists.json`: your playlists, each a name and its videos' keys in order
 - `settings.ini`: the volume, other settings, and recent searches
 
 Delete `metadata.json` and `thumbnails\` to rebuild the thumbnails.
@@ -152,8 +168,9 @@ card says so. Windows only, for now.
 - **C++** (`src/`), registered as the `Vessel` QML module:
   - `MpvItem`: a QML video item (`QQuickFramebufferObject`) that owns an mpv instance and
     draws through mpv's OpenGL render API. Qt Quick is forced onto OpenGL in `main.cpp`.
-  - `VideoLibrary` (QML singleton): scanning, the metadata cache, watch history, and the models.
+  - `VideoLibrary` (QML singleton): scanning, the metadata cache, watch history, playlists, and the models.
   - `VideoModel` / `FolderModel`: list models for shelves, folder pages and folder cards.
+  - `PlaylistModel`: the playlists (Playlists tab); `VideoLibrary` keeps them and saves `playlists.json`.
   - `PhoneDevices`: phones over USB (Windows Portable Devices / MTP), and the `mtp://` stream.
   - `VideoQuery`: a `VideoModel` created in QML, with search text, sort and filter properties
     (behind `FilterBar` and `SearchPage`).

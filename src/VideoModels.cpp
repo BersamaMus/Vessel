@@ -571,3 +571,86 @@ QHash<int, QByteArray> FolderModel::roleNames() const
         {ThumbnailPendingRole, "thumbnailPending"},
     };
 }
+
+// ---------------------------------------------------------------------------
+// PlaylistModel
+// ---------------------------------------------------------------------------
+
+PlaylistModel::PlaylistModel(VideoLibrary *library, QObject *parent)
+    : QAbstractListModel(parent)
+    , m_library(library)
+{
+    // Covers fill in as thumbnails are made.
+    connect(library, &VideoLibrary::videoChanged, this, [this](int libraryIndex) {
+        for (int row = 0; row < m_entries.size(); ++row)
+            if (m_entries[row].cover == libraryIndex)
+                emit dataChanged(index(row), index(row), {ThumbnailRole, ThumbnailPendingRole});
+    });
+    connect(library, &VideoLibrary::thumbnailsQueued, this, [this] {
+        if (!m_entries.isEmpty())
+            emit dataChanged(index(0), index(m_entries.size() - 1), {ThumbnailPendingRole});
+    });
+    refresh();
+}
+
+void PlaylistModel::refresh()
+{
+    if (!m_library)
+        return;
+    QList<Entry> entries;
+    for (const Playlist &playlist : m_library->playlistList()) {
+        const QList<int> videos = m_library->playlistIndexes(playlist);
+        entries.append({playlist.id, playlist.name, int(videos.size()), videos.value(0, -1)});
+    }
+    const bool countChanges = entries.size() != m_entries.size();
+    beginResetModel();
+    m_entries = std::move(entries);
+    endResetModel();
+    if (countChanges)
+        emit countChanged();
+}
+
+int PlaylistModel::rowCount(const QModelIndex &parent) const
+{
+    return parent.isValid() ? 0 : m_entries.size();
+}
+
+QVariant PlaylistModel::data(const QModelIndex &index, int role) const
+{
+    if (!m_library || !index.isValid() || index.row() >= m_entries.size())
+        return {};
+    const Entry &entry = m_entries[index.row()];
+
+    switch (role) {
+    case IdRole:
+        return entry.id;
+    case NameRole:
+        return entry.name;
+    case CountRole:
+        return entry.count;
+    case CountTextRole:
+        return entry.count == 0 ? tr("No videos") : entry.count == 1 ? tr("1 video") : tr("%1 videos").arg(entry.count);
+    case ThumbnailRole:
+        return entry.cover >= 0 ? m_library->thumbnailUrl(entry.cover) : QUrl();
+    case ThumbnailPendingRole: {
+        if (entry.cover < 0)
+            return false;
+        const VideoInfo &cover = m_library->video(entry.cover);
+        return !cover.hasThumbnail && m_library->thumbnailPending(cover.path);
+    }
+    default:
+        return {};
+    }
+}
+
+QHash<int, QByteArray> PlaylistModel::roleNames() const
+{
+    return {
+        {IdRole, "playlistId"},
+        {NameRole, "name"},
+        {CountRole, "count"},
+        {CountTextRole, "countText"},
+        {ThumbnailRole, "thumbnail"},
+        {ThumbnailPendingRole, "thumbnailPending"},
+    };
+}
