@@ -44,7 +44,7 @@ RowLayout {
             }
             AppMenuItem {
                 text: qsTr("Settings")
-                onTriggered: actions.app.showTab(5)
+                onTriggered: actions.app.showTab(6)
             }
         }
     }

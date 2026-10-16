@@ -11,6 +11,10 @@ Popup {
     property string text
     property string confirmText: qsTr("OK")
     property string cancelText: qsTr("Cancel")
+    // Without Cancel, for a dialog whose changes are made as they're chosen ("Done").
+    property bool cancelVisible: true
+    // The main button can wait for something to be filled in.
+    property bool confirmEnabled: true
     property real preferredWidth: 420
     // Extra content, under the message.
     default property alias content: extra.data
@@ -68,11 +72,14 @@ Popup {
             spacing: 8
 
             DialogButton {
+                visible: dialog.cancelVisible
                 text: dialog.cancelText
                 onClicked: dialog.close()
             }
             DialogButton {
                 primary: true
+                enabled: dialog.confirmEnabled
+                opacity: enabled ? 1 : 0.4
                 text: dialog.confirmText
                 onClicked: dialog.confirm()
             }

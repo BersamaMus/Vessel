@@ -213,6 +213,50 @@ private:
     QList<Entry> m_entries;
 };
 
+// The user's playlists (see VideoLibrary::playlists), most recently added to first, each
+// with its first video's thumbnail as the cover and how many of its videos are here now.
+class PlaylistModel : public QAbstractListModel
+{
+    Q_OBJECT
+    QML_ELEMENT
+    QML_UNCREATABLE("Get it from VideoLibrary")
+
+    Q_PROPERTY(int count READ rowCount NOTIFY countChanged)
+
+public:
+    enum Role {
+        IdRole = Qt::UserRole + 1,
+        NameRole,
+        CountRole,
+        CountTextRole,
+        ThumbnailRole,
+        ThumbnailPendingRole,   // the cover is still to be made
+    };
+
+    explicit PlaylistModel(VideoLibrary *library, QObject *parent = nullptr);
+
+    int rowCount(const QModelIndex &parent = {}) const override;
+    QVariant data(const QModelIndex &index, int role) const override;
+    QHash<int, QByteArray> roleNames() const override;
+
+    void refresh();
+
+signals:
+    void countChanged();
+
+private:
+    struct Entry
+    {
+        QString id;
+        QString name;
+        int count = 0;
+        int cover = -1;   // library index of the video used as the cover
+    };
+
+    QPointer<VideoLibrary> m_library;
+    QList<Entry> m_entries;
+};
+
 QString formatDuration(double seconds);
 // "2 Jan 2022, 2:16 PM" in local time (the clock as the system shows it: 12 or 24 hours).
 QString formatDateTime(const QDateTime &time);

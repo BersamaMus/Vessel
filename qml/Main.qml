@@ -37,8 +37,9 @@ ApplicationWindow {
         watch.open(path);
     }
 
-    // A list of videos, played in turn (Play all), or in a random order (Shuffle).
-    function playAll(paths, name, shuffle) {
+    // A list of videos, played in turn (Play all), or in a random order (Shuffle). It
+    // starts from `start`, if given, and otherwise from the first.
+    function playAll(paths, name, shuffle, start) {
         if (paths.length === 0)
             return;
         const list = paths.slice();
@@ -48,7 +49,7 @@ ApplicationWindow {
                 [list[i], list[j]] = [list[j], list[i]];
             }
         }
-        watch.openList(list, name, shuffle);
+        watch.openList(list, name, shuffle, start);
     }
 
     // Everything in a folder (and the folders inside it).
@@ -101,9 +102,9 @@ ApplicationWindow {
             return;
         }
         let scope = "library";
-        if (rail.currentIndex === 3)
+        if (rail.currentIndex === 4)
             scope = VideoLibrary.driveOf(current.folder ?? "") || "drives";
-        else if (rail.currentIndex === 4)
+        else if (rail.currentIndex === 5)
             scope = VideoLibrary.driveOf(current.folder ?? "") || "phones";
         contentStack.push(searchPage, { scope: scope });
     }
@@ -127,10 +128,11 @@ ApplicationWindow {
         settings.recentSearches = JSON.stringify(recentSearches.filter(s => s !== text));
     }
 
-    // 0 Home, 1 Videos, 2 Library, 3 External, 4 Phone, 5 Settings, as in the rail.
+    // 0 Home, 1 Videos, 2 Library, 3 Playlists, 4 External, 5 Phone, 6 Settings, as in the rail.
     function showTab(index) {
         rail.currentIndex = index;
-        contentStack.replace(null, [homePage, videosPage, libraryPage, externalPage, phonePage, settingsPage][index]);
+        contentStack.replace(null, [homePage, videosPage, libraryPage, playlistsPage, externalPage, phonePage,
+                                    settingsPage][index]);
     }
 
     function showLibrary() {
@@ -141,7 +143,7 @@ ApplicationWindow {
     function openDrive(path) {
         if (watch.mode === "watch" || watch.mode === "full")
             watch.minimize();
-        showTab(VideoLibrary.isPhone(path) ? 4 : 3);
+        showTab(VideoLibrary.isPhone(path) ? 5 : 4);
         openFolder(path);
     }
 
@@ -188,6 +190,54 @@ ApplicationWindow {
     // Forgets how far it got: it leaves the history and Continue watching.
     function removeFromHistory(path) {
         changeHistory(path, false, qsTr("Removed from history"));
+    }
+
+    // --- Playlists ---------------------------------------------------------------------
+    // "Save to playlist", for a video anywhere: its menu, or the watch page.
+    function saveToPlaylist(path) {
+        saveDialog.path = path;
+        saveDialog.open();
+    }
+
+    function newPlaylist() {
+        playlistNameDialog.playlistId = "";
+        playlistNameDialog.open();
+    }
+
+    function renamePlaylist(id) {
+        playlistNameDialog.playlistId = id;
+        playlistNameDialog.open();
+    }
+
+    // Asks first (deletePlaylistDialog).
+    function deletePlaylist(id) {
+        deletePlaylistDialog.playlistId = id;
+        deletePlaylistDialog.open();
+    }
+
+    function openPlaylist(id) {
+        if (watch.mode === "watch" || watch.mode === "full")
+            watch.minimize();
+        contentStack.push(playlistPage, { playlistId: id });
+    }
+
+    // From the top, shuffled, or (`start`) from one of its videos on.
+    function playPlaylist(id, shuffle, start) {
+        playAll(VideoLibrary.playlistPaths(id), VideoLibrary.playlistName(id), shuffle, start);
+    }
+
+    function removeFromPlaylist(id, path) {
+        const at = VideoLibrary.removeFromPlaylist(id, path);
+        if (at < 0)
+            return;
+        toast(qsTr("Removed from %1").arg(VideoLibrary.playlistName(id)),
+              { icon: "playlist", actionText: qsTr("Undo"), action: () => VideoLibrary.addToPlaylist(id, path, at),
+                duration: 6000 });
+    }
+
+    function showPlaylistMenu(id) {
+        playlistMenu.playlistId = id;
+        playlistMenu.popup();
     }
 
     // --- A folder's (or drive's) menu (right-click) --------------------------------------
@@ -423,6 +473,14 @@ ApplicationWindow {
         FolderPage {
             tab: "library"
         }
+    }
+    Component {
+        id: playlistsPage
+        PlaylistsPage {}
+    }
+    Component {
+        id: playlistPage
+        PlaylistPage {}
     }
     Component {
         id: externalPage
@@ -665,6 +723,10 @@ ApplicationWindow {
             onTriggered: window.play(videoMenu.path)
         }
         AppMenuItem {
+            text: qsTr("Save to playlist…")
+            onTriggered: window.saveToPlaylist(videoMenu.path)
+        }
+        AppMenuItem {
             text: Qt.platform.os === "windows" ? qsTr("Show in File Explorer") : qsTr("Show in folder")
             onTriggered: {
                 if (videoMenu.details.phone)
@@ -754,6 +816,100 @@ ApplicationWindow {
         }
     }
 
+    // --- A playlist's menu (right-click on its card, or More on its page) ---------------
+    AppMenu {
+        id: playlistMenu
+
+        property string playlistId
+        readonly property bool hasVideos: playlistId !== "" && VideoLibrary.playlistRevision >= 0 && VideoLibrary.count >= 0
+                                          && VideoLibrary.playlistPaths(playlistId).length > 0
+
+        width: 230
+
+        AppMenuItem {
+            // Not on its own page, where it's open already.
+            visible: contentStack.currentItem?.playlistId !== playlistMenu.playlistId
+            height: visible ? implicitHeight : 0
+            text: qsTr("Open")
+            onTriggered: window.openPlaylist(playlistMenu.playlistId)
+        }
+        AppMenuItem {
+            enabled: playlistMenu.hasVideos
+            text: qsTr("Play all")
+            onTriggered: window.playPlaylist(playlistMenu.playlistId, false)
+        }
+        AppMenuItem {
+            enabled: playlistMenu.hasVideos
+            text: qsTr("Shuffle")
+            onTriggered: window.playPlaylist(playlistMenu.playlistId, true)
+        }
+        MenuLine {}
+        AppMenuItem {
+            text: qsTr("Rename…")
+            onTriggered: window.renamePlaylist(playlistMenu.playlistId)
+        }
+        AppMenuItem {
+            text: qsTr("Delete playlist…")
+            onTriggered: window.deletePlaylist(playlistMenu.playlistId)
+        }
+    }
+
+    SaveToPlaylist {
+        id: saveDialog
+        app: window
+    }
+
+    // A new playlist's name (playlistId ""), or a new name for one.
+    AppDialog {
+        id: playlistNameDialog
+
+        property string playlistId
+
+        title: playlistId === "" ? qsTr("New playlist") : qsTr("Rename playlist")
+        confirmText: playlistId === "" ? qsTr("Create") : qsTr("Rename")
+        confirmEnabled: playlistNameField.text.trim() !== ""
+        onOpened: {
+            playlistNameField.text = playlistId === "" ? "" : VideoLibrary.playlistName(playlistId);
+            playlistNameField.selectAll();
+            playlistNameField.forceActiveFocus();
+        }
+        onConfirmed: {
+            const name = playlistNameField.text.trim();
+            if (name === "")
+                return;
+            if (playlistId === "")
+                window.openPlaylist(VideoLibrary.createPlaylist(name, []));
+            else
+                VideoLibrary.renamePlaylist(playlistId, name);
+        }
+
+        AppTextField {
+            id: playlistNameField
+            Layout.fillWidth: true
+            placeholderText: qsTr("Playlist name")
+            onAccepted: if (playlistNameDialog.confirmEnabled) playlistNameDialog.confirm()
+        }
+    }
+
+    AppDialog {
+        id: deletePlaylistDialog
+
+        property string playlistId
+
+        title: qsTr("Delete this playlist?")
+        text: qsTr("%1 will be deleted. The videos in it stay where they are.")
+              .arg(playlistId !== "" ? VideoLibrary.playlistName(playlistId) : "")
+        confirmText: qsTr("Delete")
+        onConfirmed: {
+            const name = VideoLibrary.playlistName(playlistId);
+            // Out of its page first, if it's showing.
+            while (contentStack.depth > 1 && contentStack.currentItem.playlistId === playlistId)
+                contentStack.pop(StackView.Immediate);
+            VideoLibrary.deletePlaylist(playlistId);
+            window.toast(qsTr("Deleted %1").arg(name), { icon: "delete" });
+        }
+    }
+
     // --- Rename ---------------------------------------------------------------------------
     AppDialog {
         id: renameDialog
@@ -775,19 +931,9 @@ ApplicationWindow {
                 window.finishRename(path, nameField.text);
         }
 
-        TextField {
+        AppTextField {
             id: nameField
             Layout.fillWidth: true
-            color: Theme.textPrimary
-            selectionColor: Theme.accent
-            selectedTextColor: Theme.accentText
-            font.pixelSize: 15
-            padding: 12
-            background: Rectangle {
-                radius: 12
-                color: Theme.surfaceHigh
-                border.color: nameField.activeFocus ? Theme.accent : Theme.border
-            }
             onAccepted: renameDialog.confirm()
         }
         Text {

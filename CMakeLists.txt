@@ -82,12 +82,16 @@ set(QML_FILES
     qml/AppActions.qml
     qml/DialogButton.qml
     qml/AppDialog.qml
+    qml/AppTextField.qml
     qml/ShelfHeader.qml
     qml/NavRail.qml
     qml/HomePage.qml
     qml/FolderPage.qml
     qml/SearchPage.qml
     qml/HistoryPage.qml
+    qml/PlaylistsPage.qml
+    qml/PlaylistPage.qml
+    qml/SaveToPlaylist.qml
     qml/DropButton.qml
     qml/FilterBar.qml
     qml/WorkProgress.qml

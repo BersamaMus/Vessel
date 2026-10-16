@@ -103,12 +103,13 @@ Item {
     onQueueChanged: Qt.callLater(scrollQueueToCurrent)
 
     // --- Actions -----------------------------------------------------------
-    // Play all and Shuffle (see Main.playAll): from the first video in the list.
-    function openList(paths, name, shuffle) {
+    // Play all and Shuffle (see Main.playAll): from `start` if it's in the list (a
+    // playlist played from one of its videos), otherwise from the first.
+    function openList(paths, name, shuffle, start) {
         playlist = paths;
         playlistName = name;
         shuffled = shuffle;
-        open(paths[0]);
+        open(start && paths.includes(start) ? start : paths[0]);
     }
 
     function open(newPath) {
@@ -621,14 +622,34 @@ Item {
             width: watch.watchRect.width
             spacing: 6
 
-            // The details can be selected and copied (see SelectableText).
-            SelectableText {
+            RowLayout {
                 Layout.fillWidth: true
-                text: watch.title
-                color: Theme.textPrimary
-                font.pixelSize: 22
-                font.weight: Font.Bold
-                font.letterSpacing: -0.3
+                spacing: 8
+
+                // The details can be selected and copied (see SelectableText).
+                SelectableText {
+                    Layout.fillWidth: true
+                    text: watch.title
+                    color: Theme.textPrimary
+                    font.pixelSize: 22
+                    font.weight: Font.Bold
+                    font.letterSpacing: -0.3
+                }
+
+                // Save to playlist; "Saved" once it's in one. Only library videos can be
+                // (a file opened from elsewhere has no place to come back to).
+                TextAction {
+                    Layout.alignment: Qt.AlignTop
+                    visible: watch.details.inLibrary ?? false
+                    readonly property bool saved: watch.path !== "" && VideoLibrary.playlistRevision >= 0
+                                                  && VideoLibrary.playlistsWith(watch.path).length > 0
+                    text: saved ? qsTr("Saved") : qsTr("Save")
+                    iconName: saved ? "playlist_added" : "playlist_add"
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 600
+                    ToolTip.text: qsTr("Save to playlist")
+                    onClicked: watch.app.saveToPlaylist(watch.path)
+                }
             }
 
             SelectableText {
@@ -1392,6 +1413,17 @@ Item {
                                     onObjectRemoved: (index, object) => moreMenu.removeItem(object)
                                 }
 
+                                Line {
+                                    visible: watch.details.inLibrary ?? false
+                                    height: visible ? implicitHeight : 0
+                                }
+                                AppMenuItem {
+                                    visible: watch.details.inLibrary ?? false
+                                    height: visible ? implicitHeight : 0
+                                    text: qsTr("Save to playlist…")
+                                    reserveCheck: true
+                                    onTriggered: watch.app.saveToPlaylist(watch.path)
+                                }
                                 Line {
                                     visible: watch.details.canManage ?? false
                                     height: visible ? implicitHeight : 0
