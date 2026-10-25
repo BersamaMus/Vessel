@@ -2,7 +2,7 @@
 
 Offline video player built with C++20, Qt 6 (Qt Quick/QML) and libmpv
 (which bundles FFmpeg for demuxing/decoding). The look follows Blimp: black
-surfaces with a yellow accent.
+surfaces with a light purple accent.
 
 ## Dependencies (Windows)
 
@@ -43,8 +43,9 @@ For testing and profiling:
 ## The player
 
 Playing a video opens the **watch page**: the video, its details below, and on the right the
-rest of its folder (as a playlist) followed by more videos. The same video can shrink into a
-**mini player** in the corner, so you can keep browsing while it plays, or go **full screen**.
+rest of its folder (as a playlist) followed by more videos, laid out in YouTube's proportions.
+The same video can shrink into a **mini player** in the corner, so you can keep browsing while it
+plays, or go **full screen**.
 
 When a video ends, the next one in its folder plays after a 5-second "Up next" countdown
 (Cancel or Play now; turn Autoplay off with the switch next to the volume, or in Settings). Closing the app while a video is
@@ -69,6 +70,8 @@ playing asks first.
 | ↑ / ↓ | Volume ±5 |
 | M | Mute |
 | C | Subtitles on / off |
+| A | Next audio track |
+| < / > | Slower / faster playback |
 | F | Full screen |
 | I | Mini player, and back |
 | Esc | Leave full screen, or shrink to the mini player |
@@ -97,8 +100,9 @@ dot-folders, the recycle bin), code projects (a folder with `.git`, `package.jso
 downloads. The side rail has two views of the result: **Videos** is your Videos folder, and
 **Library** is every folder on those drives that holds videos. New and removed videos show up by
 themselves; only the folder that changed is looked at again. For each video, a headless libmpv instance grabs a frame 20% in
-and reads the duration, size in pixels and any release-date tag. All are cached, so later
-launches are instant.
+and reads the duration, size in pixels and any release-date tag. All are cached, and so is
+the list of videos each drive's last scan found: later launches show the library straight away
+and look through the drives again in the background, adding and removing what changed.
 
 Background work shows as it happens. A ring at the bottom of the side rail spins while folders
 and drives are scanned, then fills as thumbnails are made (hover it for counts). Drive cards and

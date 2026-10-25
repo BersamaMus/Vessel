@@ -8,6 +8,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QSet>
+#include <QThreadPool>
 #include <QTimer>
 #include <QUrl>
 #include <QVariantList>
@@ -59,6 +60,9 @@ struct VideoInfo
     QString titleKey;
     QString placeKey;
     bool hasThumbnail = false;
+    // Listed from the last scan at launch, and not found again yet by this one: it may have
+    // been deleted meanwhile, so no thumbnail is made for it until it is.
+    bool unconfirmed = false;
     double position = 0;    // last watched position, seconds
     qint64 watchedAt = 0;   // ms since epoch; 0 if never watched
     bool finished = false;
@@ -339,6 +343,12 @@ private:
     // somewhere else): taken in or let go as they come and go.
     void updateLibrarySources();
     void onScanFinished(const QString &path, QList<VideoInfo> videos);
+    // What the last scan of a library source found is kept for the next launch (scans/*.json).
+    // A change (a folder looked at again, a video moved) is saved a little later, so a busy
+    // folder doesn't have the whole drive's list written out every couple of seconds.
+    void scanListChanged(const QString &source);
+    // Writes out the lists that have changed, on m_scanSaver's thread.
+    void saveScanLists();
     // Some of a phone's videos, found while it's still being scanned.
     void onVideosFound(const QString &path, const QList<VideoInfo> &found);
     void onDrivesChanged();
@@ -385,6 +395,10 @@ private:
     QList<VideoSource> m_sources;                 // the library's first, then external drives and phones
     QHash<QString, QList<VideoInfo>> m_scanned;   // source path -> its videos
     int m_pendingScans = 0;
+    QSet<QString> m_unsavedScans;   // sources whose list has changed since it was saved
+    QTimer m_scanSaveTimer;
+    // One thread, so the lists are written (and removed) in the order asked.
+    QThreadPool m_scanSaver;
     // The library before a user-requested rescan, to report what changed (empty: not reporting).
     QSet<QString> m_beforeRescan;
     bool m_reportRescan = false;
