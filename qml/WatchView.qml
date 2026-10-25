@@ -81,17 +81,17 @@ Item {
     // --- Layout ------------------------------------------------------------
     readonly property bool wide: width >= 1000
     readonly property real pad: 24
-    // The video is as wide as the window allows, but no taller than about two thirds of
-    // it (so the details show below). In a wide, short window (maximized on a 16:9 screen)
-    // that leaves room over: the side panel takes some, and the rest is shared out on both
-    // sides so the page stays centred instead of leaving a gap on the right.
-    readonly property real baseSideWidth: wide ? Math.min(420, Math.max(340, width * 0.3)) : 0
-    readonly property real watchWidth: Math.min(width - 2 * pad - (wide ? baseSideWidth + pad : 0),
-                                                height * (wide ? 0.68 : 0.5) * 16 / 9)
-    readonly property real spareWidth: Math.max(0, width - 2 * pad - watchWidth - (wide ? baseSideWidth + pad : 0))
-    readonly property real sideWidth: wide ? baseSideWidth + Math.min(spareWidth, 500 - baseSideWidth) : 0
-    readonly property real columnX: pad + (spareWidth - (sideWidth - baseSideWidth)) / 2
-    readonly property rect watchRect: Qt.rect(columnX, 16, watchWidth, watchWidth * 9 / 16)
+    // Laid out as on YouTube. The list beside the video is 402 wide (down to 300 when the
+    // window is narrower), and the video takes the rest, but stays short enough to leave
+    // about 136 below it for the title. In a wide, short window (maximized on a 16:9 screen)
+    // that leaves room over, which is shared out on both sides so the page stays centred.
+    // A narrow window puts the list under the video, so the video is kept to half the height.
+    readonly property real sideWidth: wide ? Math.max(300, Math.min(402, width - 3 * pad - 640)) : 0
+    readonly property real watchWidth: Math.min(width - 2 * pad - (wide ? sideWidth + pad : 0),
+                                                (wide ? Math.max(270, height - pad - 136) : height * 0.5) * 16 / 9)
+    readonly property real spareWidth: Math.max(0, width - 2 * pad - watchWidth - (wide ? sideWidth + pad : 0))
+    readonly property real columnX: pad + spareWidth / 2
+    readonly property rect watchRect: Qt.rect(columnX, wide ? pad : 16, watchWidth, watchWidth * 9 / 16)
     readonly property real miniWidth: Math.max(300, Math.min(400, width * 0.28))
     readonly property rect miniRect: Qt.rect(width - miniWidth - 20, height - miniWidth * 9 / 16 - 20,
                                              miniWidth, miniWidth * 9 / 16)
@@ -756,7 +756,7 @@ Item {
         }
 
         // Up next: the rest of the folder, then other videos. It reaches the window's edge,
-        // with its scroll bar there and the list stretched to just short of it.
+        // with its scroll bar there; beside the video the list itself is sideWidth wide.
         PageScroll {
             id: side
             x: watch.wide ? watch.watchRect.x + watch.watchRect.width + watch.pad : watch.watchRect.x
@@ -765,7 +765,8 @@ Item {
             height: watch.height - y
 
             ColumnLayout {
-                width: side.availableWidth - side.ScrollBar.vertical.width - 6
+                width: watch.wide ? Math.min(watch.sideWidth, side.availableWidth - side.ScrollBar.vertical.width - 6)
+                                  : side.availableWidth - side.ScrollBar.vertical.width - 6
                 spacing: 0
 
                 Rectangle {
