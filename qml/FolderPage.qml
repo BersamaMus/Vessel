@@ -2,8 +2,9 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-// One folder of the library: its sub-folders, then its videos, in grids. Sorting
-// (other than by name) or filtering lists every video in it, sub-folders included.
+// One folder of the library, seen two ways (the pills under the title): Folders, its
+// sub-folders and then its own videos; or Videos, every video in it and its sub-folders
+// in one grid, with the sort and filters. A folder with no sub-folders only has Videos.
 //
 // The title, buttons and filters stay at the top while the rest scrolls. The videos
 // are the cells of a GridView, which only makes the cards on screen, so a drive with
@@ -23,18 +24,22 @@ Item {
     readonly property var videos: VideoLibrary.videosIn(folder)
     // A drive's own page leads with what was being watched on it (drive videos stay off Home).
     readonly property var started: VideoLibrary.isDrive(folder) ? VideoLibrary.continueWatchingOn(folder) : null
-    readonly property real gap: 16
-    // Cells are a card plus the gap after it, and start at the page padding.
-    readonly property real gridWidth: width - 2 * Theme.pagePadding + gap
-    readonly property int columns: Math.max(1, Math.floor(gridWidth / (220 + gap)))
-    readonly property real cardWidth: Math.floor(gridWidth / columns) - gap
-    readonly property bool filtered: results.length !== "" || results.progress !== ""
-                                     || results.type !== "" || results.resolution !== ""
-    // Sorted or filtered: one list of everything in the folder instead of folders, then videos.
-    readonly property bool flat: results.sort !== "name" || filtered
+    // Whether there are sub-folders, so the Folders view is offered. While a drive is still
+    // being looked through they can turn up after the page has opened; it then waits until
+    // the list is scrolled back to the top to switch, rather than jumping back there.
+    readonly property bool hasFolders: subfolders.count > 0 && (grid.atYBeginning || hadFolders)
+    property bool hadFolders: false
+    onHasFoldersChanged: hadFolders = hasFolders
+    Component.onCompleted: hadFolders = hasFolders
+    readonly property bool filtered: results.filtered
+    // In the order they're in on disk, with nothing filtered out.
+    readonly property bool plain: results.sort === "name" && !filtered
+    // The Videos view (the choice is shared by every folder page): one list of everything
+    // in the folder, sub-folders included, instead of folders and then videos.
+    readonly property bool flat: !hasFolders || (app !== null && app.folderView === "videos")
     readonly property int videoCount: VideoLibrary.count >= 0 ? VideoLibrary.videoCountIn(folder) : 0
 
-    // Play all or Shuffle: what's listed, in its order, when sorted or filtered; otherwise
+    // Play all or Shuffle: what's listed, in its order, in the Videos view; otherwise
     // everything in the folder and the folders inside it.
     function playAll(shuffle) {
         const paths = flat ? results.paths() : VideoLibrary.videoPathsIn(folder);
@@ -48,6 +53,7 @@ Item {
     VideoQuery {
         id: results
         folder: page.folder
+        active: page.flat
     }
 
     component SectionLabel: Text {
@@ -135,61 +141,44 @@ Item {
                 }
             }
 
+            ViewTabs {
+                Layout.leftMargin: Theme.pagePadding
+                Layout.topMargin: 16
+                visible: page.hasFolders
+                options: [
+                    { value: "folders", label: qsTr("Folders") },
+                    { value: "videos", label: qsTr("Videos") },
+                ]
+                current: page.flat ? "videos" : "folders"
+                onChosen: value => page.app.folderView = value
+            }
+
+            // Only the Videos view is sorted and filtered.
             FilterBar {
                 Layout.fillWidth: true
                 Layout.leftMargin: Theme.pagePadding
                 Layout.rightMargin: Theme.pagePadding
-                Layout.topMargin: 16
-                visible: results.types.length > 0
+                Layout.topMargin: page.hasFolders ? 12 : 16
+                visible: page.flat && results.types.length > 0
                 query: results
             }
         }
 
-        GridView {
+        VideoGrid {
             id: grid
-            SmoothWheel { flickable: grid }
-
             Layout.fillWidth: true
             Layout.fillHeight: true
-            clip: true
-            cellWidth: Math.floor(page.gridWidth / page.columns)
-            cellHeight: Math.round(page.cardWidth * 9 / 16) + 52 + page.gap
             model: page.flat ? results : page.videos
-            boundsBehavior: Flickable.StopAtBounds
-            ScrollBar.vertical: ScrollBar {}
-
-            delegate: Item {
-                id: cell
-                required property var model
-                width: grid.cellWidth
-                height: grid.cellHeight
-
-                VideoCard {
-                    x: Theme.pagePadding
-                    width: page.cardWidth
-                    path: cell.model.path
-                    title: cell.model.title
-                    // Sorted or filtered: what it's sorted by, or how far in, or else where it is.
-                    subtitle: page.flat ? [cell.model.detail, cell.model.remainingText].filter(part => part).join("  •  ")
-                                          || cell.model.subtitle
-                                        : cell.model.remainingText
-                    thumbnail: cell.model.thumbnail
-                    loading: cell.model.thumbnailPending
-                    durationText: cell.model.durationText
-                    progress: cell.model.progress
-                    watched: cell.model.finished
-                    onClicked: page.app.play(cell.model.path)
-                }
-            }
-
-            footer: Item { width: grid.width; height: 32 }
+            // In the Videos view, what it's sorted by, or else which folder it's in (unless
+            // there's only this one).
+            detailed: page.flat && (page.hasFolders || !page.plain)
 
             header: ColumnLayout {
                 width: grid.width
                 spacing: 0
 
                 EmptyNote {
-                    visible: !page.flat && page.subfolders.count === 0 && page.videos.count === 0 && !VideoLibrary.scanning
+                    visible: !page.hasFolders && page.videoCount === 0 && !VideoLibrary.scanning
                     Layout.topMargin: 12
                     iconName: "folder"
                     text: page.tab === "library" ? qsTr("No videos found on this computer.")
@@ -199,30 +188,19 @@ Item {
                     onActionTriggered: page.tab === "library" ? page.app.rescanLibrary() : page.app.showLibrary()
                 }
 
-                // --- Sorted or filtered ------------------------------------------
+                // A drive's page leads with this in the Folders view (or, on a drive with no
+                // folders, above its videos while they're in name order).
                 SectionLabel {
-                    visible: page.flat && results.count > 0
-                    Layout.topMargin: 12
-                    text: results.count === 1 ? qsTr("1 video") : qsTr("%1 videos").arg(results.count)
-                }
-
-                EmptyNote {
-                    visible: page.flat && results.count === 0
-                    Layout.topMargin: 12
-                    iconName: "search"
-                    text: qsTr("No videos here match these filters.")
-                }
-
-                // --- Folders, then videos -----------------------------------------
-                SectionLabel {
-                    visible: !page.flat && page.started !== null && page.started.count > 0
+                    id: startedLabel
+                    visible: page.started !== null && page.started.count > 0
+                             && (!page.flat || (!page.hasFolders && page.plain))
                     Layout.topMargin: 12
                     text: qsTr("Continue watching")
                 }
 
                 Shelf {
                     Layout.fillWidth: true
-                    visible: !page.flat && page.started !== null && page.started.count > 0
+                    visible: startedLabel.visible
                     model: page.started
                     cellWidth: 276
                     cellHeight: Math.round(260 * 9 / 16) + 62
@@ -242,10 +220,25 @@ Item {
                     }
                 }
 
+                // --- Videos: everything in the folder, sorted and filtered ----------
                 SectionLabel {
-                    visible: !page.flat && page.subfolders.count > 0
+                    visible: page.flat && results.count > 0
                     // The first section sits closer under the pinned bar.
-                    Layout.topMargin: page.started !== null && page.started.count > 0 ? 24 : 12
+                    Layout.topMargin: startedLabel.visible ? 24 : 12
+                    text: results.count === 1 ? qsTr("1 video") : qsTr("%1 videos").arg(results.count)
+                }
+
+                EmptyNote {
+                    visible: page.flat && results.count === 0 && page.filtered
+                    Layout.topMargin: 12
+                    iconName: "search"
+                    text: qsTr("No videos here match these filters.")
+                }
+
+                // --- Folders: the sub-folders, then the folder's own videos ---------
+                SectionLabel {
+                    visible: !page.flat
+                    Layout.topMargin: startedLabel.visible ? 24 : 12
                     text: qsTr("Folders")
                 }
 
@@ -253,14 +246,14 @@ Item {
                     Layout.fillWidth: true
                     Layout.leftMargin: Theme.pagePadding
                     Layout.rightMargin: Theme.pagePadding
-                    visible: !page.flat && page.subfolders.count > 0
-                    spacing: page.gap
+                    visible: !page.flat
+                    spacing: grid.gap
 
                     Repeater {
                         model: page.subfolders
                         delegate: FolderCard {
                             required property var model
-                            width: page.cardWidth
+                            width: grid.cardWidth
                             name: model.name
                             countText: model.countText
                             folder: model.folder
@@ -273,8 +266,7 @@ Item {
 
                 SectionLabel {
                     visible: !page.flat && page.videos.count > 0
-                    Layout.topMargin: page.subfolders.count > 0 || (page.started !== null && page.started.count > 0) ? 24 : 12
-                    text: qsTr("Videos")
+                    text: qsTr("Videos in this folder")
                 }
             }
         }

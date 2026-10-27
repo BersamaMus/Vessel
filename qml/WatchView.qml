@@ -126,6 +126,7 @@ Item {
         if (playlist.length > 0 && !playlist.includes(newPath))
             playlist = [];
         saveProgress();
+        playingSince = 0;   // the last video's time is in; the next one's starts once it plays
         lastPosition = 0;
         lastDuration = 0;
         cancelAutoplay();
@@ -133,6 +134,7 @@ Item {
         SeekPreview.close();   // the last video's file, if it had one open
         errorText.text = "";
         path = newPath;
+        VideoLibrary.notePlay(newPath);
         mpv.volume = app.volume;
 
         // Subtitle files that seem to belong to the video: offered the first time,
@@ -396,6 +398,32 @@ Item {
     function saveProgress() {
         if (path !== "" && lastDuration > 0)
             VideoLibrary.saveProgress(path, lastPosition, lastDuration);
+        saveWatchTime();
+    }
+
+    // Time spent watching, for the stats (see StatsPage): measured from when it started
+    // playing, so pausing often doesn't lose the part-seconds in between. It goes to the
+    // video that was playing then, not whatever has been opened since.
+    property double playingSince: 0   // ms, 0 while not playing
+    property string watchingPath
+
+    onPlayingChanged: {
+        if (playing) {
+            playingSince = Date.now();
+            watchingPath = path;
+        } else {
+            saveWatchTime();
+            playingSince = 0;
+        }
+    }
+
+    function saveWatchTime() {
+        if (playingSince <= 0)
+            return;
+        const now = Date.now();
+        if (watchingPath !== "")
+            VideoLibrary.addWatchTime(watchingPath, (now - playingSince) / 1000);
+        playingSince = now;
     }
 
     function wake() {
@@ -1166,6 +1194,7 @@ Item {
                 }
 
                 ColumnLayout {
+                    id: controlsColumn
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.bottom: parent.bottom
@@ -1527,6 +1556,18 @@ Item {
                             }
                         }
                     }
+                }
+
+                // Below the seek bar's line, clicks do nothing: they don't seek, and they
+                // don't fall through to the video and pause it. The bar is grabbed on the
+                // line or above it. (The line is 6px thick on hover, centred in the bar.)
+                MouseArea {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    height: controlsColumn.anchors.bottomMargin + seekBar.height / 2 - 3
+                    hoverEnabled: true
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
                 }
             }
         }

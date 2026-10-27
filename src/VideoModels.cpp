@@ -335,8 +335,19 @@ void VideoQuery::update()
         refresh();
 }
 
+void VideoQuery::setActive(bool active)
+{
+    if (m_active == active)
+        return;
+    m_active = active;
+    emit queryChanged();
+    update();
+}
+
 QList<int> VideoQuery::find()
 {
+    if (!m_active)
+        return {};
     const VideoLibrary *lib = library();
     const QString prefix = m_folder.endsWith(QLatin1Char('/')) ? m_folder : m_folder + QLatin1Char('/');
     const QString query = searchKey(m_text);
@@ -383,12 +394,20 @@ QList<int> VideoQuery::find()
         });
     };
     if (m_sort == QLatin1String("name")) {
-        QCollator collator;
-        collator.setNumericMode(true);
-        collator.setCaseSensitivity(Qt::CaseInsensitive);
-        std::stable_sort(hits.begin(), hits.end(), [&](const Hit &a, const Hit &b) {
-            return collator.compare(lib->video(a.index).title, lib->video(b.index).title) < 0;
-        });
+        // A long list uses the library's title order (made once per rebuild); a short one,
+        // a folder of a few episodes, is quicker to sort by its own titles than to wait
+        // for the whole library to be put in order.
+        if (lib->hasTitleRanks() || hits.size() * 8 > lib->count()) {
+            const QList<int> &rank = lib->titleRanks();
+            std::sort(hits.begin(), hits.end(), [&](const Hit &a, const Hit &b) { return rank[a.index] < rank[b.index]; });
+        } else {
+            QCollator collator;
+            collator.setNumericMode(true);
+            collator.setCaseSensitivity(Qt::CaseInsensitive);
+            std::stable_sort(hits.begin(), hits.end(), [&](const Hit &a, const Hit &b) {
+                return collator.compare(lib->video(a.index).title, lib->video(b.index).title) < 0;
+            });
+        }
     } else if (m_sort == QLatin1String("added")) {
         by([](const VideoInfo &v) { return v.added; });
     } else if (m_sort == QLatin1String("watched")) {

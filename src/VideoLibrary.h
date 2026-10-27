@@ -5,6 +5,7 @@
 #include <QHash>
 #include <QJsonObject>
 #include <QList>
+#include <QMap>
 #include <QObject>
 #include <QPointer>
 #include <QSet>
@@ -14,6 +15,7 @@
 #include <QVariantList>
 #include <QtQml/qqmlregistration.h>
 
+#include <array>
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -93,6 +95,22 @@ struct Playlist
 
 // Where videos come from: one of the computer's own drives (the library), a connected
 // external drive, or a phone (also external; its path is "mtp://<serial>").
+// Watch time on one day, in seconds: in all, and in each hour of the day.
+struct DayStats
+{
+    double seconds = 0;
+    std::array<double, 24> hours{};
+};
+
+// One video's watch stats. The title is kept for when it's no longer here.
+struct VideoStats
+{
+    double seconds = 0;
+    int plays = 0;      // times opened in the player
+    int finished = 0;   // times played to the end
+    QString title;
+};
+
 struct VideoSource
 {
     QString path;
@@ -148,6 +166,8 @@ class VideoLibrary : public QObject
     Q_PROPERTY(PlaylistModel *playlists READ playlists CONSTANT)
     // Goes up whenever a playlist changes, for bindings on playlistName() and the like.
     Q_PROPERTY(int playlistRevision READ playlistRevision NOTIFY playlistsChanged)
+    // Goes up whenever watch time is added (or the stats are reset), for the stats page.
+    Q_PROPERTY(int statsRevision READ statsRevision NOTIFY statsChanged)
     // Set by the player while a phone's video is open: that phone's thumbnails wait meanwhile.
     Q_PROPERTY(bool phonePlaying READ phonePlaying WRITE setPhonePlaying NOTIFY phonePlayingChanged)
 
@@ -173,6 +193,7 @@ public:
     FolderModel *folders() const { return m_folders; }
     PlaylistModel *playlists() const { return m_playlistModel; }
     int playlistRevision() const { return m_playlistRevision; }
+    int statsRevision() const { return m_statsRevision; }
 
     // Looks for new and removed videos; rescanFinished() reports what changed.
     Q_INVOKABLE void rescan();
@@ -264,6 +285,17 @@ public:
     Q_INVOKABLE QVariantMap historyEntry(const QString &path) const;
     Q_INVOKABLE void restoreHistory(const QString &path, const QVariantMap &saved);
 
+    // --- Watch stats (stats.json) --------------------------------------------------
+    // Time spent watching, added by the player every few seconds while a video plays. It's
+    // the time that passed, not how much of the video went by: a minute at 2x is a minute.
+    // Kept per day and hour of the day, and per video. Clearing the history leaves it be.
+    Q_INVOKABLE void addWatchTime(const QString &path, double seconds);
+    // A video was opened in the player.
+    Q_INVOKABLE void notePlay(const QString &path);
+    // Everything the stats page shows; see watchStats() in VideoLibrary.cpp for what's in it.
+    Q_INVOKABLE QVariantMap watchStats() const;
+    Q_INVOKABLE void clearStats();
+
     // --- Playing a list -----------------------------------------------------------
     // Every video in a folder and the folders inside it, in order ("" for the whole library).
     Q_INVOKABLE QStringList videoPathsIn(const QString &folder) const;
@@ -300,6 +332,12 @@ public:
 
     // For the models.
     const VideoInfo &video(int index) const { return m_videos.at(index); }
+    // Where each video comes when the whole library is put in title order ("Ep 2" before
+    // "Ep 10"), by library index. Sorting by name then compares two numbers instead of two
+    // titles, which is much quicker with thousands of videos. Worked out once per rebuild,
+    // the first time a long list is sorted by name (a short one sorts its own titles).
+    const QList<int> &titleRanks() const;
+    bool hasTitleRanks() const { return m_titleRanks.size() == m_videos.size(); }
     QUrl thumbnailUrl(int index) const;
     QList<int> indexesIn(const QString &folder) const;
     // Keeps a model up to date as the library changes.
@@ -332,6 +370,7 @@ signals:
     void videoMoved(const QString &oldPath, const QString &newPath, const QString &error);
     // A playlist was made, renamed, deleted, or had videos added, taken out or moved.
     void playlistsChanged();
+    void statsChanged();
 
 private:
     void scanAll();
@@ -373,6 +412,12 @@ private:
     // After a video file was renamed or moved: its entry, history, thumbnail and cached
     // details follow it (or it leaves the library, if it went somewhere outside it).
     void relocate(const QString &oldPath, const QString &newPath);
+    // Counts that a video was played to the end, for the stats (by saveProgress).
+    void noteFinished(const QString &key, const QString &path);
+    // After any change to the stats: tells the stats page, and saves them soon.
+    void statsEdited();
+    void readStats(const QJsonObject &json);
+    QJsonObject statsJson() const;
     // Changes a video's history entry (`change` edits the JSON) and what's shown of it.
     void editHistory(const QString &path, const std::function<void(QJsonObject &)> &change);
     // Started, unfinished videos on a drive, or in the library for "".
@@ -416,6 +461,7 @@ private:
     bool m_hasPriority = false;
 
     QList<VideoInfo> m_videos;
+    mutable QList<int> m_titleRanks;   // see titleRanks(); empty until first asked for
     QHash<QString, int> m_byPath;
     QHash<QString, int> m_byKey;   // video key -> index, for playlists
     quint32 m_pickSeed = 0;
@@ -427,6 +473,14 @@ private:
     QList<Playlist> m_playlists;   // most recently added to first
     bool m_playlistsChanged = false;   // since they were last saved
     int m_playlistRevision = 0;
+    // Kept as plain tables, since they change every few seconds while a video plays; they're
+    // only turned into JSON when saved. In stats.json:
+    // {since, days: {"2026-10-27": {s, h: {"21": seconds}}}, videos: {key: {s, plays, done, title}}}
+    qint64 m_statsSince = 0;           // when watch time was first added (ms), 0 before
+    QMap<QDate, DayStats> m_statDays;
+    QHash<QString, VideoStats> m_statVideos;   // by video key, as the history is
+    bool m_statsChanged = false;   // since they were last saved
+    int m_statsRevision = 0;
     QTimer m_saveTimer;
 
     DriveWatcher *m_driveWatcher = nullptr;

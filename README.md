@@ -110,10 +110,13 @@ folder pages show "Making thumbnails • 124 of 830" for their own videos, and c
 thumbnail pulse. The folder you're looking at is done first: its own videos, then a cover for
 each sub-folder, then the rest.
 
-Every Library and folder page has a **sort** menu (Name, Recently added, Recently watched,
-Release year, Longest first, Largest first) and **filters** (Length, Progress, Type, Resolution).
-Sorting by anything but Name, or filtering, lists every video in the folder and its sub-folders
-in one grid. The release year comes from the file name ("Speed (1994)", "Ne Zha 2019 1080p"), or
+Every Library and folder page with sub-folders has two views, picked with the pills under the
+title: **Folders** (the sub-folders, then the folder's own videos) and **Videos** (every video in
+the folder and its sub-folders in one grid). The choice is remembered for all folder pages. The
+External and Phone tabs have the same switch: **Drives** / **Phones** (the cards) or **Videos**
+(every video on the connected drives, or phones). The Videos view has a **sort** menu (Name,
+Recently added, Recently watched, Release year, Longest first, Largest first) and **filters**
+(Length, Progress, Type, Resolution). The release year comes from the file name ("Speed (1994)", "Ne Zha 2019 1080p"), or
 failing that from the file's tags.
 
 **Search** (the magnifier on Home and Library, or Ctrl+F) looks through the library and connected
@@ -121,6 +124,17 @@ drives by title and folder name, ignoring case, accents and punctuation. Titles 
 what you typed come first, then titles that contain it, then videos whose title and folders
 contain every word ("house season 2"). It has the same sort and filters, and remembers your
 last few searches.
+
+## Watch stats
+
+**Your stats** (on the History page, or More > Your watch stats) shows how long you've spent
+watching: today, the last 7 days and all time, your streak of days in a row, videos played and
+watched to the end, and your biggest day. Bar charts show the last 30 days, the hours of the day
+and the days of the week you watch most (hover a bar for its time), with a title to match
+("Night owl", "Early bird", "Prime-time viewer"), and the 10 videos you've spent longest on.
+It's the time that passes while a video plays (a minute at 2x is a minute), counted from when
+this version was first run (`stats.json` in the data folder). Clearing the history leaves the
+stats be; Reset stats starts them over.
 
 ## Playlists
 

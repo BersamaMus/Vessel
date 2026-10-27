@@ -115,6 +115,11 @@ class VideoQuery : public VideoModel, public QQmlParserStatus
     Q_PROPERTY(QString resolution READ resolution WRITE setResolution NOTIFY queryChanged)
     // The file types in the folder (whatever the filters), for the type filter: "avi", "mp4".
     Q_PROPERTY(QStringList types READ types NOTIFY typesChanged)
+    // Off while its list isn't on show (a folder page in its Folders view): it then lists
+    // nothing, and doesn't look through the library each time the library changes.
+    Q_PROPERTY(bool active READ active WRITE setActive NOTIFY queryChanged)
+    // Some filter is on (length, progress, type or resolution), so videos may be left out.
+    Q_PROPERTY(bool filtered READ filtered NOTIFY queryChanged)
 
 public:
     explicit VideoQuery(QObject *parent = nullptr);
@@ -128,6 +133,11 @@ public:
     QString type() const { return m_type; }
     QString resolution() const { return m_resolution; }
     QStringList types() const { return m_types; }
+    bool active() const { return m_active; }
+    bool filtered() const
+    {
+        return !m_length.isEmpty() || !m_progress.isEmpty() || !m_type.isEmpty() || !m_resolution.isEmpty();
+    }
 
     void setFolder(const QString &folder) { set(m_folder, folder); }
     void setSource(const QString &source) { set(m_source, source); }
@@ -137,6 +147,7 @@ public:
     void setProgress(const QString &progress) { set(m_progress, progress); }
     void setType(const QString &type) { set(m_type, type); }
     void setResolution(const QString &resolution) { set(m_resolution, resolution); }
+    void setActive(bool active);
 
     void classBegin() override {}
     void componentComplete() override;
@@ -154,6 +165,7 @@ private:
     QList<int> find();
 
     bool m_complete = false;
+    bool m_active = true;
     QString m_folder;
     QString m_source = QStringLiteral("library");
     QString m_text;

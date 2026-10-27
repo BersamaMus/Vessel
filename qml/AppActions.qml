@@ -43,6 +43,10 @@ RowLayout {
                 onTriggered: actions.app.rescanLibrary()
             }
             AppMenuItem {
+                text: qsTr("Your watch stats")
+                onTriggered: actions.app.openStats()
+            }
+            AppMenuItem {
                 text: qsTr("Settings")
                 onTriggered: actions.app.showTab(6)
             }
