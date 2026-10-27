@@ -41,6 +41,13 @@ Item {
 
                 TextAction {
                     Layout.alignment: Qt.AlignTop
+                    text: qsTr("Your stats")
+                    iconName: "bar_chart"
+                    onClicked: page.app.openStats()
+                }
+
+                TextAction {
+                    Layout.alignment: Qt.AlignTop
                     visible: page.history.count > 0
                     text: qsTr("Clear history")
                     onClicked: clearDialog.open()

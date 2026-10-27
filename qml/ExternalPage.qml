@@ -3,46 +3,30 @@ import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 // Connected USB drives, external hard drives and memory cards, under a bar with
-// the title and search that stays put while the page scrolls.
-Item {
+// the title and search that stays put while the page scrolls. The pills under the
+// title switch between the drives' cards and every video on them in one grid.
+DevicePage {
     id: external
 
-    PageBar {
-        id: bar
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        scrolled: page.contentY > 1
-
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.leftMargin: Theme.pagePadding
-            Layout.rightMargin: Theme.pagePadding - 8
-            Layout.topMargin: 14
-            spacing: 8
-
-            PageTitle {
-                title: qsTr("External")
-                subtitle: qsTr("USB drives, external hard drives and memory cards")
-            }
-
-            // Search looks through every connected drive.
-            AppActions {
-                searchVisible: VideoLibrary.drives.length > 0
-                searchTip: qsTr("Search your drives (Ctrl+F)")
-            }
-        }
-    }
+    source: "drives"
+    title: qsTr("External")
+    subtitle: qsTr("USB drives, external hard drives and memory cards")
+    searchTip: qsTr("Search your drives (Ctrl+F)")
+    cardsTab: ({ value: "drives", label: qsTr("Drives") })
+    view: app !== null ? app.externalView : ""
+    onViewChosen: value => app.externalView = value
+    available: VideoLibrary.drives.length > 0
+    emptyIcon: "usb"
+    emptyText: qsTr("No videos found on your drives.")
+    noMatchText: qsTr("No videos on your drives match these filters.")
+    cardsScrolled: page.contentY > 1
 
     PageScroll {
         id: page
 
         readonly property var app: ApplicationWindow.window
 
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: bar.bottom
-        anchors.bottom: parent.bottom
+        anchors.fill: parent
 
         component DriveCard: AbstractButton {
             id: card

@@ -89,14 +89,18 @@ set(QML_FILES
     qml/FolderPage.qml
     qml/SearchPage.qml
     qml/HistoryPage.qml
+    qml/StatsPage.qml
     qml/PlaylistsPage.qml
     qml/PlaylistPage.qml
     qml/SaveToPlaylist.qml
     qml/DropButton.qml
     qml/FilterBar.qml
+    qml/ViewTabs.qml
+    qml/VideoGrid.qml
     qml/WorkProgress.qml
     qml/PageBar.qml
     qml/WatchView.qml
+    qml/DevicePage.qml
     qml/ExternalPage.qml
     qml/PhonePage.qml
     qml/SettingsPage.qml

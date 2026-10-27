@@ -90,7 +90,8 @@ files are served from the module root, so they use each other with no imports. *
 | What | Where |
 |---|---|
 | Videos tab = Videos folder, Library tab = everything | `videosPage` / `libraryPage` in Main.qml, both [FolderPage.qml](../qml/FolderPage.qml) |
-| Folder page: sub-folders, videos in a virtualised `GridView`, Play all / Shuffle | FolderPage.qml (`playAll()`), `Main.playFolder()` |
+| Folder page: sub-folders, videos in a virtualised `GridView`, Play all / Shuffle | FolderPage.qml (`playAll()`), [VideoGrid.qml](../qml/VideoGrid.qml), `Main.playFolder()` |
+| Folders / Videos views (remembered; also Drives / Videos on External, Phones / Videos on Phone) | [ViewTabs.qml](../qml/ViewTabs.qml); `FolderPage.flat` / `hasFolders`, `DevicePage.listing` (shared by External and Phone); `Main.folderView` / `externalView` / `phoneView` |
 | Walking a drive or folder (runs on a worker thread) | `scanFolder()`, `listFolder()` (one `FindFirstFileExW` listing per folder) in VideoLibrary.cpp |
 | Last scan's list, shown at launch while the drive is scanned again (read off the UI thread; no thumbnails until the scan finds a video again) | `saveScanList()` / `loadScanList()` (`scans/<drive>.json`, checked against the drive's id), `updateLibrarySources()`, `VideoInfo::unconfirmed` |
 | Keeping that list up to date (saved at most every 30 s after a folder change, on its own thread) | `scanListChanged()`, `saveScanLists()`, `m_scanSaver` |
@@ -156,6 +157,14 @@ Almost all of it is [WatchView.qml](../qml/WatchView.qml), sectioned with `// --
 | History page grouped by day | [HistoryPage.qml](../qml/HistoryPage.qml), `HistoryModel` in VideoModels.cpp |
 | Mark watched / unwatched, remove, clear all, Undo | `setWatched()`, `historyEntry()` / `restoreHistory()`, `clearHistory()`, `editHistory()`; menu items in Main.qml |
 
+### Watch stats
+| What | Where |
+|---|---|
+| Counting time spent watching (measured from when it started playing, handed over with each save, to the video that was playing) | `playingSince` / `watchingPath`, `saveWatchTime()` in WatchView → `VideoLibrary::addWatchTime()`; plays: `notePlay()` in `WatchView.open()`; played to the end: `noteFinished()` from `saveProgress()` |
+| Kept per day, hour of the day and video (`stats.json`), following renames and moves (in the library or not) | `m_statDays` / `m_statVideos`, `readStats()` / `statsJson()`, `statsEdited()`, `relocate()` in VideoLibrary.cpp |
+| Totals, streaks, last 30 days, hours, weekdays, most watched | `VideoLibrary::watchStats()` |
+| Stats page (tiles, bar charts, "Night owl" title), Reset | [StatsPage.qml](../qml/StatsPage.qml) (`BarChart`, `Tile`, `kind`); `clearStats()`; opened by `Main.openStats()` (gone back to if it's open already, see `openOnce()`) from HistoryPage and AppActions |
+
 ### Playlists
 | What | Where |
 |---|---|
@@ -178,7 +187,7 @@ Almost all of it is [WatchView.qml](../qml/WatchView.qml), sectioned with `// --
 | What | Where |
 |---|---|
 | Detecting drives plugged in / removed (polling) | [DriveWatcher.cpp](../src/DriveWatcher.cpp) → `VideoLibrary::onDrivesChanged()` |
-| External tab, drive cards with space used | [ExternalPage.qml](../qml/ExternalPage.qml), `VideoLibrary::drives` |
+| External tab, drive cards with space used | [ExternalPage.qml](../qml/ExternalPage.qml) (on [DevicePage.qml](../qml/DevicePage.qml), the bar, pills and Videos grid it shares with Phone), `VideoLibrary::drives` |
 | Continue watching on a drive | `continueWatchingOn()`, `startedIn()` |
 | Eject | [DriveEject.cpp](../src/DriveEject.cpp) via `VideoLibrary::ejectDrive()` (the player lets go first) |
 

@@ -19,6 +19,12 @@ ApplicationWindow {
     property alias subtitleSize: settings.subtitleSize
     property alias subtitleColor: settings.subtitleColor
     property alias subtitleBackground: settings.subtitleBackground
+    // What the Library and folder pages list: "folders" (sub-folders, then the folder's own
+    // videos) or "videos" (every video in one grid). External and Phone have their own:
+    // "drives" / "phones" (the cards) or "videos".
+    property alias folderView: settings.folderView
+    property alias externalView: settings.externalView
+    property alias phoneView: settings.phoneView
     readonly property bool isFullScreen: visibility === Window.FullScreen
     // Set once the user has confirmed closing while a video plays.
     property bool closeConfirmed: false
@@ -163,9 +169,22 @@ ApplicationWindow {
 
 
     function openHistory() {
+        openOnce(historyPage, "history");
+    }
+
+    function openStats() {
+        openOnce(statsPage, "stats");
+    }
+
+    // A page there's only ever one of: if it's open already (further back), it's gone back to.
+    function openOnce(component, name) {
         if (watch.mode === "watch" || watch.mode === "full")
             watch.minimize();
-        contentStack.push(historyPage);
+        const open = contentStack.find(item => item.objectName === name);
+        if (open)
+            contentStack.popToItem(open);
+        else
+            contentStack.push(component);
     }
 
     // --- A video's menu (right-click), and what's in it ------------------------------
@@ -375,6 +394,9 @@ ApplicationWindow {
         property string subtitleSize: "medium"
         property string subtitleColor: "white"
         property string subtitleBackground: "outline"
+        property string folderView: "folders"
+        property string externalView: "drives"
+        property string phoneView: "phones"
         // A JSON list (QSettings would turn a one-item list into a plain string).
         property string recentSearches: "[]"
     }
@@ -504,7 +526,11 @@ ApplicationWindow {
     }
     Component {
         id: historyPage
-        HistoryPage {}
+        HistoryPage { objectName: "history" }
+    }
+    Component {
+        id: statsPage
+        StatsPage { objectName: "stats" }
     }
 
     // Files dropped on the window: a video plays; subtitle files go with the video that's

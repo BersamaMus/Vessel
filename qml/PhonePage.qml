@@ -4,46 +4,30 @@ import QtQuick.Layouts
 
 // Phones connected by USB, under a bar with the title and search that stays put
 // while the page scrolls. A phone only shows its videos once it's unlocked and (on
-// Android) set to File transfer; until then its card says so.
-Item {
+// Android) set to File transfer; until then its card says so. The pills under the
+// title switch between the phones' cards and every video on them in one grid.
+DevicePage {
     id: phones
 
-    PageBar {
-        id: bar
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        scrolled: page.contentY > 1
-
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.leftMargin: Theme.pagePadding
-            Layout.rightMargin: Theme.pagePadding - 8
-            Layout.topMargin: 14
-            spacing: 8
-
-            PageTitle {
-                title: qsTr("Phone")
-                subtitle: qsTr("Phones connected with a USB cable")
-            }
-
-            // Search looks through every connected phone.
-            AppActions {
-                searchVisible: VideoLibrary.phones.some(phone => phone.ready)
-                searchTip: qsTr("Search your phones (Ctrl+F)")
-            }
-        }
-    }
+    source: "phones"
+    title: qsTr("Phone")
+    subtitle: qsTr("Phones connected with a USB cable")
+    searchTip: qsTr("Search your phones (Ctrl+F)")
+    cardsTab: ({ value: "phones", label: qsTr("Phones") })
+    view: app !== null ? app.phoneView : ""
+    onViewChosen: value => app.phoneView = value
+    available: VideoLibrary.phones.some(phone => phone.ready)
+    emptyIcon: "smartphone"
+    emptyText: qsTr("No videos found on your phones.")
+    noMatchText: qsTr("No videos on your phones match these filters.")
+    cardsScrolled: page.contentY > 1
 
     PageScroll {
         id: page
 
         readonly property var app: ApplicationWindow.window
 
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: bar.bottom
-        anchors.bottom: parent.bottom
+        anchors.fill: parent
 
         component PhoneCard: AbstractButton {
             id: card

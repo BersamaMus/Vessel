@@ -1395,6 +1395,7 @@ void VideoLibrary::rebuild()
             *it = sortedByPath(std::move(*it));
     }
     m_videos.clear();
+    m_titleRanks.clear();
     m_byPath.clear();
     m_byKey.clear();
     for (const VideoSource &source : std::as_const(m_sources)) {
@@ -1829,6 +1830,30 @@ FolderModel *VideoLibrary::foldersIn(const QString &folder)
     return model;   // owned by QML (no parent)
 }
 
+const QList<int> &VideoLibrary::titleRanks() const
+{
+    if (m_titleRanks.size() != m_videos.size()) {
+        // A collator sort key per title is made once; comparing keys is far cheaper than
+        // comparing the titles themselves over and over.
+        QCollator collator;
+        collator.setNumericMode(true);
+        collator.setCaseSensitivity(Qt::CaseInsensitive);
+        std::vector<std::pair<QCollatorSortKey, int>> order;
+        order.reserve(m_videos.size());
+        for (int i = 0; i < m_videos.size(); ++i)
+            order.emplace_back(collator.sortKey(m_videos[i].title), i);
+        // Same titles stay in library (folder) order.
+        std::sort(order.begin(), order.end(), [](const auto &a, const auto &b) {
+            const int c = a.first.compare(b.first);
+            return c != 0 ? c < 0 : a.second < b.second;
+        });
+        m_titleRanks.resize(m_videos.size());
+        for (int rank = 0; rank < int(order.size()); ++rank)
+            m_titleRanks[order[rank].second] = rank;
+    }
+    return m_titleRanks;
+}
+
 void VideoLibrary::track(VideoModel *model)
 {
     m_folderVideoModels.removeAll(nullptr);
@@ -2223,11 +2248,17 @@ void VideoLibrary::saveScanLists()
 
 void VideoLibrary::relocate(const QString &oldPath, const QString &newPath)
 {
+    // Not in the library (opened from somewhere else): what's remembered about it is under
+    // its path, and there's no scan list, thumbnail or details to update.
     const int index = m_byPath.value(oldPath, -1);
-    if (index < 0)
-        return;   // not in the library: nothing to update
-    const VideoInfo old = m_videos[index];
-    forgetScanned(oldPath);
+    VideoInfo old;
+    if (index >= 0) {
+        old = m_videos[index];
+        forgetScanned(oldPath);
+    } else {
+        old.path = oldPath;
+        old.key = oldPath;
+    }
 
     // Where it is now: one of the library's sources (first, as in rebuild()) or a drive, if any.
     QString newKey = newPath;
@@ -2260,6 +2291,11 @@ void VideoLibrary::relocate(const QString &oldPath, const QString &newPath)
         }
         m_history.insert(newKey, entry);
     }
+    // Its watch time.
+    if (newKey != old.key && m_statVideos.contains(old.key)) {
+        m_statVideos.insert(newKey, m_statVideos.take(old.key));
+        statsEdited();
+    }
     // Its places in playlists.
     if (newKey != old.key) {
         for (Playlist &playlist : m_playlists) {
@@ -2275,7 +2311,7 @@ void VideoLibrary::relocate(const QString &oldPath, const QString &newPath)
         }
     }
     // And its thumbnail and details, so they needn't be made again.
-    if (!newCacheKey.isEmpty() && newCacheKey != old.cacheKey) {
+    if (!old.cacheKey.isEmpty() && !newCacheKey.isEmpty() && newCacheKey != old.cacheKey) {
         if (m_metadata.contains(old.cacheKey)) {
             m_metadata.insert(newCacheKey, m_metadata.take(old.cacheKey));
             m_metadataChanged = true;
@@ -2383,6 +2419,223 @@ void VideoLibrary::restoreHistory(const QString &path, const QVariantMap &saved)
     });
 }
 
+// --- Watch stats ------------------------------------------------------------------------
+
+namespace {
+
+// A day counts as one with watching in it (for streaks) from a minute on.
+constexpr double kDayCounts = 60;
+
+} // namespace
+
+void VideoLibrary::addWatchTime(const QString &path, double seconds)
+{
+    if (path.isEmpty() || seconds <= 0)
+        return;
+    seconds = qMin(seconds, 120.0);   // the player adds a few seconds at a time
+    const QDateTime now = QDateTime::currentDateTime();
+    if (m_statsSince == 0)
+        m_statsSince = now.toMSecsSinceEpoch();
+
+    DayStats &day = m_statDays[now.date()];
+    day.seconds += seconds;
+    day.hours[now.time().hour()] += seconds;
+
+    VideoStats &video = m_statVideos[keyFor(path)];
+    video.seconds += seconds;
+    video.title = titleOf(path);
+    statsEdited();
+}
+
+void VideoLibrary::notePlay(const QString &path)
+{
+    if (path.isEmpty())
+        return;
+    VideoStats &video = m_statVideos[keyFor(path)];
+    ++video.plays;
+    video.title = titleOf(path);
+    statsEdited();
+}
+
+void VideoLibrary::noteFinished(const QString &key, const QString &path)
+{
+    VideoStats &video = m_statVideos[key];
+    ++video.finished;
+    video.title = titleOf(path);
+    statsEdited();
+}
+
+void VideoLibrary::clearStats()
+{
+    m_statsSince = 0;
+    m_statDays.clear();
+    m_statVideos.clear();
+    statsEdited();
+}
+
+void VideoLibrary::statsEdited()
+{
+    m_statsChanged = true;
+    ++m_statsRevision;
+    emit statsChanged();
+    scheduleSave();
+}
+
+void VideoLibrary::readStats(const QJsonObject &json)
+{
+    m_statsSince = json.value(QLatin1String("since")).toInteger();
+    const QJsonObject days = json.value(QLatin1String("days")).toObject();
+    for (auto it = days.begin(); it != days.end(); ++it) {
+        const QDate date = QDate::fromString(it.key(), Qt::ISODate);
+        if (!date.isValid())
+            continue;
+        const QJsonObject entry = it.value().toObject();
+        DayStats &day = m_statDays[date];
+        day.seconds = entry.value(QLatin1String("s")).toDouble();
+        const QJsonObject hours = entry.value(QLatin1String("h")).toObject();
+        for (auto h = hours.begin(); h != hours.end(); ++h)
+            if (const int hour = h.key().toInt(); hour >= 0 && hour < 24)
+                day.hours[hour] = h.value().toDouble();
+    }
+    const QJsonObject videos = json.value(QLatin1String("videos")).toObject();
+    for (auto it = videos.begin(); it != videos.end(); ++it) {
+        const QJsonObject entry = it.value().toObject();
+        m_statVideos.insert(it.key(), {entry.value(QLatin1String("s")).toDouble(),
+                                       entry.value(QLatin1String("plays")).toInt(),
+                                       entry.value(QLatin1String("done")).toInt(),
+                                       entry.value(QLatin1String("title")).toString()});
+    }
+}
+
+QJsonObject VideoLibrary::statsJson() const
+{
+    QJsonObject days;
+    for (auto it = m_statDays.cbegin(); it != m_statDays.cend(); ++it) {
+        QJsonObject hours;
+        for (int hour = 0; hour < 24; ++hour)
+            if (it->hours[hour] > 0)
+                hours.insert(QString::number(hour), it->hours[hour]);
+        days.insert(it.key().toString(Qt::ISODate), QJsonObject{{"s", it->seconds}, {"h", hours}});
+    }
+    QJsonObject videos;
+    for (auto it = m_statVideos.cbegin(); it != m_statVideos.cend(); ++it) {
+        QJsonObject entry{{"s", it->seconds}, {"plays", it->plays}, {"title", it->title}};
+        if (it->finished > 0)
+            entry.insert(QLatin1String("done"), it->finished);
+        videos.insert(it.key(), entry);
+    }
+    QJsonObject json{{"days", days}, {"videos", videos}};
+    if (m_statsSince > 0)
+        json.insert(QLatin1String("since"), m_statsSince);
+    return json;
+}
+
+// Times are in seconds.
+//  total, today, week (the last 7 days), daysWatched, streak (days in a row up to today, or
+//  yesterday if today has none yet), longestStreak, plays, finished (videos watched to the end),
+//  since ("27 Oct 2026", "" before any watching)
+//  days: the last 30, oldest first: {label "Mon 27 Oct", day "27", seconds, today}
+//  hours: 24 totals by hour of the day; weekdays: 7, Monday first
+//  bestDay: {label, seconds}; top: the 10 most watched, {path ("" if it's not here), title,
+//  seconds, plays, thumbnail}
+QVariantMap VideoLibrary::watchStats() const
+{
+    const QLocale locale = QLocale::system();
+    const QDate today = QDate::currentDate();
+    const auto secondsOn = [this](const QDate &date) { return m_statDays.value(date).seconds; };
+
+    double total = 0, week = 0, best = 0;
+    int daysWatched = 0;
+    QDate bestDate;
+    QList<double> hours(24, 0), weekdays(7, 0);
+    QList<QDate> watchedDates;
+    for (auto it = m_statDays.cbegin(); it != m_statDays.cend(); ++it) {
+        const QDate date = it.key();
+        const double seconds = it->seconds;
+        total += seconds;
+        weekdays[date.dayOfWeek() - 1] += seconds;
+        for (int hour = 0; hour < 24; ++hour)
+            hours[hour] += it->hours[hour];
+        if (date.daysTo(today) < 7)
+            week += seconds;
+        if (seconds > best) {
+            best = seconds;
+            bestDate = date;
+        }
+        if (seconds >= kDayCounts) {
+            ++daysWatched;
+            watchedDates.append(date);
+        }
+    }
+
+    // The days are in date order already (a QMap).
+    int longest = 0, run = 0;
+    for (int i = 0; i < watchedDates.size(); ++i) {
+        run = i > 0 && watchedDates[i - 1].daysTo(watchedDates[i]) == 1 ? run + 1 : 1;
+        longest = qMax(longest, run);
+    }
+    int streak = 0;
+    for (QDate date = secondsOn(today) >= kDayCounts ? today : today.addDays(-1);
+         secondsOn(date) >= kDayCounts; date = date.addDays(-1))
+        ++streak;
+
+    QVariantList last30;
+    for (int back = 29; back >= 0; --back) {
+        const QDate date = today.addDays(-back);
+        last30.append(QVariantMap{{"label", locale.toString(date, QStringLiteral("ddd d MMM"))},
+                                  {"day", date.day()},
+                                  {"seconds", secondsOn(date)},
+                                  {"today", back == 0}});
+    }
+
+    QList<QHash<QString, VideoStats>::const_iterator> top;
+    int plays = 0, finished = 0;
+    for (auto it = m_statVideos.cbegin(); it != m_statVideos.cend(); ++it) {
+        plays += it->plays;
+        finished += it->finished > 0 ? 1 : 0;
+        if (it->seconds >= kDayCounts)
+            top.append(it);
+    }
+    std::sort(top.begin(), top.end(), [](const auto &a, const auto &b) { return a->seconds > b->seconds; });
+    QVariantList topList;
+    for (const auto &t : std::as_const(top)) {
+        if (topList.size() == 10)
+            break;
+        const int index = m_byKey.value(t.key(), -1);
+        topList.append(QVariantMap{{"path", index >= 0 ? m_videos[index].path : QString()},
+                                   {"title", index >= 0 ? m_videos[index].title : t->title},
+                                   {"seconds", t->seconds},
+                                   {"plays", t->plays},
+                                   {"thumbnail", index >= 0 ? thumbnailUrl(index) : QUrl()}});
+    }
+
+    const qint64 since = m_statsSince;
+    const auto toList = [](const QList<double> &values) {
+        QVariantList list;
+        for (double value : values)
+            list.append(value);
+        return list;
+    };
+    return {
+        {"total", total},
+        {"today", secondsOn(today)},
+        {"week", week},
+        {"daysWatched", daysWatched},
+        {"streak", streak},
+        {"longestStreak", longest},
+        {"plays", plays},
+        {"finished", finished},
+        {"since", since > 0 ? locale.toString(QDateTime::fromMSecsSinceEpoch(since).date(), QStringLiteral("d MMM yyyy"))
+                            : QString()},
+        {"days", last30},
+        {"hours", toList(hours)},
+        {"weekdays", toList(weekdays)},
+        {"bestDay", QVariantMap{{"label", bestDate.isValid() ? locale.toString(bestDate, QStringLiteral("ddd d MMM yyyy")) : QString()},
+                                {"seconds", best}}},
+        {"top", topList},
+    };
+}
+
 int VideoLibrary::audioChoice(const QString &path) const
 {
     return m_history.value(keyFor(path)).toObject().value(QStringLiteral("audio")).toInt();
@@ -2481,6 +2734,8 @@ void VideoLibrary::saveProgress(const QString &path, double position, double dur
     // Updated in place, keeping anything else remembered about the video (its subtitle choice).
     const QString key = keyFor(path);
     QJsonObject entry = m_history.value(key).toObject();
+    if (finished && !entry.value(QLatin1String("finished")).toBool())
+        noteFinished(key, path);
     entry.insert(QStringLiteral("position"), position);
     entry.insert(QStringLiteral("duration"), duration);
     entry.insert(QStringLiteral("watchedAt"), now);
@@ -2549,6 +2804,7 @@ void VideoLibrary::loadState()
                                      entry.contains(QLatin1String("w"))});
     }
     m_history = readJson(QStringLiteral("history.json"));
+    readStats(readJson(QStringLiteral("stats.json")));
 
     const QJsonArray playlists = readJson(QStringLiteral("playlists.json")).value(QLatin1String("playlists")).toArray();
     for (const QJsonValue &value : playlists) {
@@ -2602,6 +2858,8 @@ void VideoLibrary::save()
         writeJson(QStringLiteral("metadata.json"), metadata);
     }
     writeJson(QStringLiteral("history.json"), m_history);
+    if (std::exchange(m_statsChanged, false))
+        writeJson(QStringLiteral("stats.json"), statsJson());
     if (std::exchange(m_playlistsChanged, false)) {
         QJsonArray playlists;
         for (const Playlist &playlist : std::as_const(m_playlists))
