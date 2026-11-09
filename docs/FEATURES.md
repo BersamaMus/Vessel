@@ -80,7 +80,7 @@ files are served from the module root, so they use each other with no imports. *
 ### Home
 | What | Where |
 |---|---|
-| Page layout: Continue watching, Quick picks, Recently added, Folders | [HomePage.qml](../qml/HomePage.qml) |
+| Page layout: Continue watching, Quick picks, History (`VideoLibrary::history`), Recently added, Folders | [HomePage.qml](../qml/HomePage.qml) |
 | Continue watching (started but not finished, `kMinProgress` = 10 s) | `VideoLibrary::continueWatching`, `refreshContinueWatching()`, `isFinished()` (95% or < 5 s left) |
 | Quick picks (random, reshuffled on demand) | `VideoLibrary::quickPicks`, `reshuffleQuickPicks()` (`m_pickSeed`) |
 | Recently added (by file creation time = when it was copied in) | `VideoLibrary::recentlyAdded`, `fileVideo()` |
@@ -140,6 +140,7 @@ Almost all of it is [WatchView.qml](../qml/WatchView.qml), sectioned with `// --
 | On-video pill (volume, subtitles, autoplay) | `flash()`, `indicator` |
 | Keyboard shortcuts | `// --- Keyboard` at the bottom of WatchView (`Key` component) |
 | Media keys and Windows' media flyout | [MediaControls.cpp](../src/MediaControls.cpp) (C++/WinRT), the `MediaControls` item in Main.qml |
+| No sleep while playing; screen kept on only for a video in a visible window | `MpvItem::updateKeepAwake()` (`SetThreadExecutionState`), `m_hasVideo` from `updateTracks()`; `loaded` cleared on any end of file |
 | Drive unplugged mid-video | the handler under "Unplugged mid-video" in WatchView |
 
 ### Subtitles and audio tracks
@@ -148,6 +149,8 @@ Almost all of it is [WatchView.qml](../qml/WatchView.qml), sectioned with `// --
 | Finding matching subtitle files (same name, episode tag, sole video, `Subs/` folders) | `VideoLibrary::subtitlesFor()`, `normalizedName()`, `episodeOf()` |
 | "Subtitles found: Turn on / No thanks", and remembering the choice | `subtitlePrompt` in WatchView, `acceptSubtitles()` / `declineSubtitles()`; `VideoLibrary::subtitleChoice()` / `setSubtitleChoice()` |
 | Subtitle menu, adding a file, C to toggle | `subtitleMenu`, `addSubtitleFiles()`, `chooseSubtitle()`, `toggleSubtitles()` |
+| Search online (OpenSubtitles): by title and file hash, download next to the video, daily-limit fallback to the website (`resetAt`, saved in Main's `subtitleLimitReset`), "Downloaded" mark on ones fetched before | [SubtitleSearch.cpp](../src/SubtitleSearch.cpp) (`search()`, `movieHash()`, `download()`, `saveDownload()`); dialog in [SubtitleSearchDialog.qml](../qml/SubtitleSearchDialog.qml), `onlineSubtitles` in WatchView; API key from `opensubtitles.key` in CMakeLists.txt; language in Main's `subtitleLanguage` setting; what was downloaded per video in `VideoLibrary::downloadedSubtitles()` / `noteDownloadedSubtitle()` (the history entry's `downloads`, followed through `relocate()`); unused ones in the data folder deleted by `VideoLibrary::removeUnusedSubtitles()` at start |
+| Subtitle timing: Z / X, the Timing… panel, remembered per video and track | `shiftSubtitles()`, `resetTiming()`, `timingTrack`, `timingPanel` in WatchView; the `MpvItem::subtitleDelay` property; stored in `VideoLibrary::subtitleDelay()` / `setSubtitleDelay()` (the history entry's `timing`, followed through `relocate()`) |
 | Subtitle look (size, colour, background) | Settings in Main.qml → `WatchView.applySubtitleStyle()`; UI in [SettingsPage.qml](../qml/SettingsPage.qml) |
 | Audio track choice (remembered per video), A to cycle | `chooseAudio()`, `cycleAudio()`; `VideoLibrary::audioChoice()` / `setAudioChoice()` |
 
@@ -161,9 +164,9 @@ Almost all of it is [WatchView.qml](../qml/WatchView.qml), sectioned with `// --
 | What | Where |
 |---|---|
 | Counting time spent watching (measured from when it started playing, handed over with each save, to the video that was playing) | `playingSince` / `watchingPath`, `saveWatchTime()` in WatchView → `VideoLibrary::addWatchTime()`; plays: `notePlay()` in `WatchView.open()`; played to the end: `noteFinished()` from `saveProgress()` |
-| Kept per day, hour of the day and video (`stats.json`), following renames and moves (in the library or not) | `m_statDays` / `m_statVideos`, `readStats()` / `statsJson()`, `statsEdited()`, `relocate()` in VideoLibrary.cpp |
-| Totals, streaks, last 30 days, hours, weekdays, most watched | `VideoLibrary::watchStats()` |
-| Stats page (tiles, bar charts, "Night owl" title), Reset | [StatsPage.qml](../qml/StatsPage.qml) (`BarChart`, `Tile`, `kind`); `clearStats()`; opened by `Main.openStats()` (gone back to if it's open already, see `openOnce()`) from HistoryPage and AppActions |
+| Kept per day and hour of the day, and plays and finishes per video (`stats.json`), following renames and moves (in the library or not) | `m_statDays` / `m_statVideos`, `readStats()` / `statsJson()`, `statsEdited()`, `relocate()` in VideoLibrary.cpp |
+| Totals, streaks, last 30 days, hours, weekdays | `VideoLibrary::watchStats()` |
+| Stats page (tiles, bar charts, "Night owl" title), Reset | [StatsPage.qml](../qml/StatsPage.qml) (`BarChart`, `Tile`, `kind`); `clearStats()`; the Stats tab (index 7) in NavRail.qml, also opened by `Main.openStats()` from HistoryPage (on top of it, with a back button) |
 
 ### Playlists
 | What | Where |

@@ -199,11 +199,19 @@ Item {
     }
 
     // Subtitle files the user picked or dropped on the player: the first is shown, the
-    // others listed in the subtitles menu. Remembered for this video.
+    // others listed in the subtitles menu. Remembered for this video. One that's loaded
+    // already (picked again, or a download turned on again) is chosen, not added twice.
     function addSubtitleFiles(files) {
         if (files.length === 0)
             return;
-        files.forEach((file, i) => mpv.addSubtitleFile(file, i === 0));
+        const same = (a, b) => a.replace(/\\/g, "/").toLowerCase() === b.replace(/\\/g, "/").toLowerCase();
+        files.forEach((file, i) => {
+            const loaded = mpv.subtitleTracks.find(track => track.file && same(track.file, file));
+            if (!loaded)
+                mpv.addSubtitleFile(file, i === 0);
+            else if (i === 0)
+                mpv.setSubtitleTrack(loaded.id);
+        });
         VideoLibrary.setSubtitleChoice(path, files[0]);
         subtitleOffer = "";
         flash("subtitles", qsTr("Subtitles: %1").arg(files[0].split("/").pop()));
@@ -241,6 +249,51 @@ Item {
         flash("subtitles", qsTr("Subtitles: %1").arg(track.label));
         if (track.file)
             VideoLibrary.setSubtitleChoice(path, track.file);
+    }
+
+    // --- Subtitle timing (Z / X, and Timing… in the subtitles menu) ------------
+    // The subtitle track showing, as VideoLibrary keeps its timing: its file, or "#<id>" for one
+    // built into the video. "" while none is.
+    readonly property string timingTrack: {
+        if (!mpv.loaded || mpv.subtitleId === 0)
+            return "";
+        const track = mpv.subtitleTracks.find(t => t.id === mpv.subtitleId);
+        return !track ? "" : track.file ? track.file.replace(/\\/g, "/") : "#" + track.id;
+    }
+    property bool timingOpen: false
+
+    // Each track gets the timing fixed for it before (the player clears it for each file).
+    onTimingTrackChanged: mpv.subtitleDelay = timingTrack !== "" ? VideoLibrary.subtitleDelay(path, timingTrack) : 0
+
+    function saveTiming(delay) {
+        mpv.subtitleDelay = delay;
+        VideoLibrary.setSubtitleDelay(path, timingTrack, delay);
+    }
+
+    // "0.5 s later", for a delay.
+    function delayText(delay) {
+        const seconds = Math.abs(delay).toFixed(1);
+        return Math.abs(delay) < 0.05 ? qsTr("Original timing")
+             : delay > 0 ? qsTr("%1 s later").arg(seconds) : qsTr("%1 s earlier").arg(seconds);
+    }
+
+    // Shows the subtitles earlier (a negative step) or later.
+    function shiftSubtitles(step) {
+        if (timingTrack === "") {
+            flash("subtitles", qsTr("Subtitles are off"));
+            return;
+        }
+        const delay = Math.round((mpv.subtitleDelay + step) * 1000) / 1000;
+        saveTiming(delay);
+        flash("subtitles", qsTr("Subtitles: %1").arg(delayText(delay)));
+        wake();
+    }
+
+    function resetTiming() {
+        if (timingTrack === "")
+            return;
+        saveTiming(0);
+        flash("subtitles", qsTr("Subtitles: original timing"));
     }
 
     // --- Subtitle look (Settings > Subtitles) ---------------------------------
@@ -386,6 +439,7 @@ Item {
             app.toggleFullScreen();
         mpv.stop();
         SeekPreview.close();   // lets go of the file too
+        timingOpen = false;
         mode = "closed";
     }
 
@@ -1321,8 +1375,23 @@ Item {
                                     }
                                 }
                                 AppMenuItem {
+                                    text: qsTr("Timing…")
+                                    onTriggered: watch.timingOpen = true
+                                }
+                                AppMenuItem {
                                     text: qsTr("Add subtitle file…")
                                     onTriggered: subtitleDialog.open()
+                                }
+                                // Only in a build with an OpenSubtitles key (see SubtitleSearch).
+                                AppMenuItem {
+                                    visible: onlineSubtitles.available
+                                    height: visible ? implicitHeight : 0
+                                    text: qsTr("Search online…")
+                                    onTriggered: {
+                                        onlineSubtitles.path = watch.path;
+                                        onlineSubtitles.query = watch.title;
+                                        onlineSubtitles.open();
+                                    }
                                 }
                             }
                         }
@@ -1656,6 +1725,92 @@ Item {
             }
         }
 
+        // --- Subtitle timing ------------------------------------------------------------
+        // In the corner of the video, not over the controls, so the subtitles can be watched
+        // while they're moved.
+        Rectangle {
+            id: timingPanel
+
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.rightMargin: 16
+            anchors.topMargin: 56
+            width: Math.min(parent.width - 32, 340)
+            height: timingColumn.implicitHeight + 32
+            radius: Theme.radiusCard
+            color: "#F21C1C1C"
+            border.color: Theme.border
+            opacity: watch.timingOpen && watch.miniProgress < 0.5 ? 1 : 0
+            visible: opacity > 0
+            Behavior on opacity { NumberAnimation { duration: 200 } }
+
+            // Clicks on the panel itself shouldn't pause the video.
+            MouseArea {
+                anchors.fill: parent
+            }
+
+            ColumnLayout {
+                id: timingColumn
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: 16
+                anchors.topMargin: 10
+                spacing: 10
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    Text {
+                        Layout.fillWidth: true
+                        text: qsTr("Subtitle timing")
+                        color: Theme.textPrimary
+                        font.pixelSize: 15
+                        font.weight: Font.Bold
+                    }
+                    IconButton {
+                        Layout.rightMargin: -8
+                        implicitWidth: 32
+                        implicitHeight: 32
+                        iconName: "close"
+                        iconSize: 20
+                        tip: qsTr("Close")
+                        onClicked: watch.timingOpen = false
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+                    TimingStep { text: qsTr("−1 s"); tip: qsTr("Earlier (Shift+Z)"); onClicked: watch.shiftSubtitles(-1) }
+                    TimingStep { text: qsTr("−0.1"); tip: qsTr("Earlier (Z)"); onClicked: watch.shiftSubtitles(-0.1) }
+                    Text {
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignHCenter
+                        text: watch.timingTrack === "" ? qsTr("Subtitles are off") : watch.delayText(mpv.subtitleDelay)
+                        color: Math.abs(mpv.subtitleDelay) >= 0.05 ? Theme.accent : Theme.textSecondary
+                        font.pixelSize: 14
+                        font.weight: Font.DemiBold
+                        font.features: { "tnum": 1 }
+                        elide: Text.ElideRight
+                    }
+                    TimingStep { text: qsTr("+0.1"); tip: qsTr("Later (X)"); onClicked: watch.shiftSubtitles(0.1) }
+                    TimingStep { text: qsTr("+1 s"); tip: qsTr("Later (Shift+X)"); onClicked: watch.shiftSubtitles(1) }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.rightMargin: -12
+                    Item { Layout.fillWidth: true }
+                    TextAction {
+                        text: qsTr("Reset")
+                        enabled: watch.timingTrack !== "" && Math.abs(mpv.subtitleDelay) > 0.0005
+                        opacity: enabled ? 1 : 0.4
+                        onClicked: watch.resetTiming()
+                    }
+                }
+            }
+        }
+
         // --- Subtitle files dragged over the window --------------------------------
         Rectangle {
             anchors.fill: parent
@@ -1881,6 +2036,45 @@ Item {
         onAccepted: watch.addSubtitleFiles([VideoLibrary.localPath(selectedFile)])
     }
 
+    SubtitleSearchDialog {
+        id: onlineSubtitles
+        app: watch.app
+        // Still the video it was searched for (the next one may have started meanwhile).
+        onSubtitleChosen: file => {
+            if (path === watch.path)
+                watch.addSubtitleFiles([file]);
+        }
+    }
+
+    // A step button in the subtitle timing panel ("−0.1"); held down, it repeats.
+    component TimingStep: AbstractButton {
+        id: step
+        property string tip
+        enabled: watch.timingTrack !== ""
+        autoRepeat: true
+        hoverEnabled: true
+        focusPolicy: Qt.NoFocus
+        implicitWidth: 50
+        implicitHeight: 34
+        ToolTip.visible: hovered && tip !== ""
+        ToolTip.text: tip
+        ToolTip.delay: 600
+        HoverHandler { cursorShape: Qt.PointingHandCursor }
+        background: Rectangle {
+            radius: height / 2
+            color: step.pressed ? Theme.surfaceHover : step.hovered ? Theme.controlHover : Theme.control
+        }
+        contentItem: Text {
+            text: step.text
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            color: step.enabled ? Theme.textPrimary : Theme.textTertiary
+            font.pixelSize: 13
+            font.weight: Font.DemiBold
+            font.features: { "tnum": 1 }
+        }
+    }
+
     // --- Keyboard ------------------------------------------------------------
     component Key: Shortcut {
         enabled: watch.mode === "watch" || watch.mode === "full"
@@ -1898,6 +2092,11 @@ Item {
     Key { sequence: "Shift+N"; onActivated: watch.playNext() }
     Key { sequence: "Shift+P"; onActivated: watch.playPrevious() }
     Key { sequence: "C"; onActivated: watch.toggleSubtitles() }
+    // As in mpv: subtitles earlier / later.
+    Key { sequence: "Z"; onActivated: watch.shiftSubtitles(-0.1) }
+    Key { sequence: "X"; onActivated: watch.shiftSubtitles(0.1) }
+    Key { sequence: "Shift+Z"; onActivated: watch.shiftSubtitles(-1) }
+    Key { sequence: "Shift+X"; onActivated: watch.shiftSubtitles(1) }
     Key { sequence: "A"; onActivated: watch.cycleAudio() }
     // Shift+. and Shift+, as on YouTube.
     Key { sequences: [">", "Shift+>"]; onActivated: watch.stepSpeed(1) }

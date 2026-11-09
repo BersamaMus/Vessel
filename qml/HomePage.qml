@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-// Continue watching, Quick picks, Recently added and Folders, under a bar with the
+// Continue watching, Quick picks, History, Recently added and Folders, under a bar with the
 // logo and buttons that stays put while the page scrolls.
 Item {
     id: home
@@ -127,6 +127,36 @@ Item {
                     subtitle: model.durationText !== "" ? model.subtitle + "  •  " + model.durationText : model.subtitle
                     thumbnail: model.thumbnail
                     loading: model.thumbnailPending
+                    progress: model.progress
+                    watched: model.finished
+                    onClicked: page.app.play(model.path)
+                }
+            }
+
+            // --- History -----------------------------------------------------
+            ShelfHeader {
+                visible: VideoLibrary.history.count > 0
+                title: qsTr("History")
+                actionLabel: qsTr("See all")
+                onActionTriggered: page.app.openHistory()
+            }
+
+            Shelf {
+                Layout.fillWidth: true
+                visible: VideoLibrary.history.count > 0
+                model: VideoLibrary.history
+                cellWidth: page.cardWidth + 16
+                cellHeight: page.cardCellHeight
+                arrowCenterY: page.cardWidth * 9 / 32
+                delegate: VideoCard {
+                    required property var model
+                    width: page.cardWidth
+                    path: model.path
+                    title: model.title
+                    subtitle: model.finished ? qsTr("Watched") : model.remainingText
+                    thumbnail: model.thumbnail
+                    loading: model.thumbnailPending
+                    durationText: model.durationText
                     progress: model.progress
                     watched: model.finished
                     onClicked: page.app.play(model.path)

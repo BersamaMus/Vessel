@@ -93,6 +93,7 @@ set(QML_FILES
     qml/PlaylistsPage.qml
     qml/PlaylistPage.qml
     qml/SaveToPlaylist.qml
+    qml/SubtitleSearchDialog.qml
     qml/DropButton.qml
     qml/FilterBar.qml
     qml/ViewTabs.qml
@@ -128,6 +129,7 @@ qt_add_qml_module(VesselPlayer
         src/SeekPreview.cpp src/SeekPreview.h
         src/FolderWatcher.cpp src/FolderWatcher.h
         src/SystemIntegration.cpp src/SystemIntegration.h
+        src/SubtitleSearch.cpp src/SubtitleSearch.h
 )
 
 target_include_directories(VesselPlayer PRIVATE src)
@@ -148,6 +150,29 @@ if(WIN32)
 endif()
 target_link_libraries(VesselPlayer PRIVATE Qt6::Concurrent Qt6::Network Qt6::OpenGL Qt6::Quick mpv::mpv)
 target_compile_definitions(VesselPlayer PRIVATE PROJECT_VERSION="${PROJECT_VERSION}")
+
+# The OpenSubtitles API key, for "Search online…" in the subtitles menu: from
+# opensubtitles.key next to this file (kept out of git), or -DVESSEL_OPENSUBTITLES_KEY=….
+# Without one, Vessel builds without the feature. Only SubtitleSearch.cpp sees it.
+set(VESSEL_OPENSUBTITLES_KEY "" CACHE STRING "OpenSubtitles API key (else read from opensubtitles.key)")
+set(_opensubtitles_key "${VESSEL_OPENSUBTITLES_KEY}")
+set(_opensubtitles_key_file "${CMAKE_CURRENT_SOURCE_DIR}/opensubtitles.key")
+if(_opensubtitles_key STREQUAL "")
+    if(EXISTS "${_opensubtitles_key_file}")
+        file(READ "${_opensubtitles_key_file}" _opensubtitles_key)
+        string(STRIP "${_opensubtitles_key}" _opensubtitles_key)
+        # Reconfigure when the key is changed.
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_opensubtitles_key_file}")
+    else()
+        # Or when it's added: a new file changes the folder's own timestamp.
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
+endif()
+if(_opensubtitles_key STREQUAL "")
+    message(STATUS "No OpenSubtitles API key: building without online subtitle search")
+endif()
+set_source_files_properties(src/SubtitleSearch.cpp PROPERTIES
+    COMPILE_DEFINITIONS "OPENSUBTITLES_API_KEY=\"${_opensubtitles_key}\"")
 # The window icon elsewhere (Windows takes it from the exe).
 qt_add_resources(VesselPlayer "app_icon" PREFIX "/" FILES icon/vessel.png)
 

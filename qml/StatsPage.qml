@@ -3,7 +3,7 @@ import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 // How much is watched, and when: today, this week and all time, the last 30 days, the
-// hours and days of the week most of it happens in, and the most watched videos.
+// hours and days of the week most of it happens in. A tab of its own in the rail.
 // Counted from when this page first came to be (the history doesn't say how long anything
 // was watched for), by the player as videos play (see VideoLibrary::addWatchTime).
 Item {
@@ -68,12 +68,16 @@ Item {
 
         RowLayout {
             Layout.fillWidth: true
-            Layout.leftMargin: 8
+            Layout.leftMargin: back.visible ? 8 : Theme.pagePadding
             Layout.rightMargin: Theme.pagePadding
             Layout.topMargin: 14
             spacing: 8
 
+            // Only when it was opened from the History page, on top of it; as a tab there's
+            // nothing to go back to.
             IconButton {
+                id: back
+                visible: page.StackView.index > 0
                 Layout.alignment: Qt.AlignTop
                 iconName: "back"
                 tip: qsTr("Back (Esc)")
@@ -292,7 +296,7 @@ Item {
                 visible: !page.hasStats
                 Layout.topMargin: 12
                 iconName: "bar_chart"
-                text: qsTr("Watch something, and how much you watch, when, and what you come back to most shows up here.")
+                text: qsTr("Watch something, and how much you watch, and when, shows up here.")
             }
 
             ColumnLayout {
@@ -429,31 +433,6 @@ Item {
                                 return result;
                             }
                         }
-                    }
-                }
-
-                SectionTitle {
-                    visible: (page.stats.top ?? []).length > 0
-                    text: qsTr("Most watched")
-                }
-                Repeater {
-                    model: page.stats.top ?? []
-                    delegate: PickRow {
-                        required property var modelData
-                        required property int index
-                        Layout.fillWidth: true
-                        Layout.maximumWidth: 900
-                        thumbWidth: 160
-                        titleLines: 2
-                        enabled: modelData.path !== ""
-                        path: modelData.path
-                        title: (index + 1) + ".  " + modelData.title
-                        subtitle: [qsTr("%1 watched").arg(page.span(modelData.seconds)),
-                                   modelData.plays === 1 ? qsTr("played once") : modelData.plays > 1 ? qsTr("played %1 times").arg(modelData.plays) : "",
-                                   modelData.path === "" ? qsTr("not here now") : ""]
-                                  .filter(part => part).join("  •  ")
-                        thumbnail: modelData.thumbnail
-                        onClicked: page.app.play(modelData.path)
                     }
                 }
             }

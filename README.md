@@ -1,6 +1,6 @@
 # Vessel
 
-Offline video player built with C++20, Qt 6 (Qt Quick/QML) and libmpv
+Offline-first video player built with C++20, Qt 6 (Qt Quick/QML) and libmpv
 (which bundles FFmpeg for demuxing/decoding). The look follows Blimp: black
 surfaces with a light purple accent.
 
@@ -29,6 +29,12 @@ cmake --build --preset debug
 ```
 
 The post-build step copies `libmpv-2.dll` and runs `windeployqt`, so the build folder runs as-is.
+
+Online subtitle search needs an [OpenSubtitles API key](https://www.opensubtitles.com/consumers),
+in a file named `opensubtitles.key` next to `CMakeLists.txt` (git ignores it) or passed as
+`-DVESSEL_OPENSUBTITLES_KEY=…`. Without one, Vessel builds without that menu item. Adding the
+file later is picked up by the next build.
+
 You can also open the folder directly in Visual Studio or Qt Creator. Both pick up `CMakePresets.json`.
 
 The **Release** build is several times faster than Debug at scanning and searching (Debug Qt
@@ -51,6 +57,11 @@ When a video ends, the next one in its folder plays after a 5-second "Up next" c
 (Cancel or Play now; turn Autoplay off with the switch next to the volume, or in Settings). Closing the app while a video is
 playing asks first.
 
+While something plays, the computer doesn't go to sleep, however long it runs. The screen stays on
+too while there's a picture to watch (a video, in the window or the mini player); for music, or
+with Vessel minimised, it can turn off as usual. Paused, finished, or if a file fails part-way,
+the usual power settings apply again.
+
 | Gesture (mouse drag or touch) | Action |
 |---|---|
 | Swipe the video left or right | Full screen, and back |
@@ -70,6 +81,7 @@ playing asks first.
 | ↑ / ↓ | Volume ±5 |
 | M | Mute |
 | C | Subtitles on / off |
+| Z / X | Subtitles 0.1s earlier / later (Shift: 1s) |
 | A | Next audio track |
 | < / > | Slower / faster playback |
 | F | Full screen |
@@ -90,6 +102,30 @@ optional language tag (`Movie.en.srt`); or the same episode (`S01E02`, `1x02`, "
 2"); or when it is in a folder that holds just that one video. `Subs` and `Subtitles` folders next
 to the video count too. The subtitles button on the video lists every track, built-in or from a
 file, and can add a subtitle file by hand.
+
+**Search online…** in the same menu looks for subtitles on OpenSubtitles.com, the only time
+Vessel goes online, and only when you ask. It searches by the video's title (which you can edit)
+in the language you pick (Windows' own at first, then the last one used), and by a fingerprint of
+the file: the hash OpenSubtitles uses, made from its size and its first and last 64 KB. Subtitles
+that match the fingerprint were made for that exact file, so they're in sync; they're listed
+first as "Made for this file". Phone videos are searched by title only. Picking one downloads it
+next to the video as `Movie.en.srt` (`Movie.en.2.srt` if that's taken), so it's found again and
+moves with the video, and turns it on. When the folder can't be written to (a phone, a read-only
+drive) it goes in Vessel's data folder instead, under `subtitles`; those are deleted at the next
+start once no video's history points to them (the video was deleted, say). Subtitles downloaded for the
+video before are marked "Downloaded" in later searches (as long as the file is still there, also
+after the video is renamed or moved), and picking one turns the saved file on again without
+downloading it. Without an OpenSubtitles
+account a few downloads a day are allowed; once they're used up, the dialog says so and when more
+are allowed (counting down, and remembered after a restart), and picking a subtitle opens its
+page on the website, to download it there and drop it on the video.
+
+Subtitles that are out of step can be fixed with Z / X (0.1s earlier / later, Shift for 1s) or
+**Timing…** in the subtitles menu, a panel in the corner of the video that leaves the subtitles in
+view while you move them (**Reset** goes back to the file's own timing). It works for subtitle
+files and the ones built into a video alike, without changing any file: the timing is remembered
+for that video and that subtitle track, and follows a subtitle file renamed or moved with its
+video.
 
 ## The library
 
@@ -127,11 +163,12 @@ last few searches.
 
 ## Watch stats
 
-**Your stats** (on the History page, or More > Your watch stats) shows how long you've spent
+**Your stats** (the Stats tab, or Your stats on the History page, where Back returns to the
+History) shows how long you've spent
 watching: today, the last 7 days and all time, your streak of days in a row, videos played and
 watched to the end, and your biggest day. Bar charts show the last 30 days, the hours of the day
 and the days of the week you watch most (hover a bar for its time), with a title to match
-("Night owl", "Early bird", "Prime-time viewer"), and the 10 videos you've spent longest on.
+("Night owl", "Early bird", "Prime-time viewer").
 It's the time that passes while a video plays (a minute at 2x is a minute), counted from when
 this version was first run (`stats.json` in the data folder). Clearing the history leaves the
 stats be; Reset stats starts them over.

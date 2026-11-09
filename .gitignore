@@ -4,3 +4,4 @@ CMakeUserPresets.json
 .vs/
 *.user
 .idea/
+opensubtitles.key

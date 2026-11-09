@@ -105,10 +105,8 @@ struct DayStats
 // One video's watch stats. The title is kept for when it's no longer here.
 struct VideoStats
 {
-    double seconds = 0;
     int plays = 0;      // times opened in the player
     int finished = 0;   // times played to the end
-    QString title;
 };
 
 struct VideoSource
@@ -242,6 +240,15 @@ public:
     // none, or undefined if they haven't been asked (or the chosen file is gone).
     Q_INVOKABLE QVariant subtitleChoice(const QString &path) const;
     Q_INVOKABLE void setSubtitleChoice(const QString &path, const QString &subtitlePath);
+    // Subtitles downloaded for a video from OpenSubtitles (see SubtitleSearch), so the search
+    // can show which ones it has already: {fileId: file}, those whose file is still there.
+    Q_INVOKABLE QVariantMap downloadedSubtitles(const QString &path) const;
+    Q_INVOKABLE void noteDownloadedSubtitle(const QString &path, int fileId, const QString &file);
+    // The timing fixed for a video's subtitles (see MpvItem's subtitleDelay): one per subtitle
+    // track, since each file may be timed differently. `track` is the subtitle file, or "#<id>"
+    // for one built into the video. 0 puts the subtitles back on their own timing.
+    Q_INVOKABLE double subtitleDelay(const QString &path, const QString &track) const;
+    Q_INVOKABLE void setSubtitleDelay(const QString &path, const QString &track, double delay);
     // The audio track the user chose for a video, or 0 for its default.
     Q_INVOKABLE int audioChoice(const QString &path) const;
     Q_INVOKABLE void setAudioChoice(const QString &path, int track);
@@ -261,6 +268,8 @@ public:
     Q_INVOKABLE QString videoNameFilter() const;
     // And the subtitle ones, for the subtitle dialog, and whether a dropped file is one.
     Q_INVOKABLE QString subtitleNameFilter() const;
+    // Where downloaded subtitles go when their video's folder can't take them (see SubtitleSearch).
+    Q_INVOKABLE QString subtitleDownloadFolder() const { return m_dataDir + QStringLiteral("/subtitles"); }
     Q_INVOKABLE bool isSubtitleFile(const QString &path) const;
 
     // --- Managing files: videos on this computer or a drive, not on a phone ----------
@@ -413,7 +422,7 @@ private:
     // details follow it (or it leaves the library, if it went somewhere outside it).
     void relocate(const QString &oldPath, const QString &newPath);
     // Counts that a video was played to the end, for the stats (by saveProgress).
-    void noteFinished(const QString &key, const QString &path);
+    void noteFinished(const QString &key);
     // After any change to the stats: tells the stats page, and saves them soon.
     void statsEdited();
     void readStats(const QJsonObject &json);
@@ -432,6 +441,9 @@ private:
     QString keyFor(const QString &path) const;
     QString thumbnailFile(const VideoInfo &video) const;
     void loadState();
+    // Deletes subtitles downloaded into subtitleDownloadFolder() that no video's history
+    // points to any more (the video was deleted, or its entry dropped).
+    void removeUnusedSubtitles();
     void scheduleSave();
     void save();
 

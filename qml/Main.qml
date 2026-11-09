@@ -19,6 +19,10 @@ ApplicationWindow {
     property alias subtitleSize: settings.subtitleSize
     property alias subtitleColor: settings.subtitleColor
     property alias subtitleBackground: settings.subtitleBackground
+    // The language last searched for online ("en", see SubtitleSearch); "" for Windows' own.
+    property alias subtitleLanguage: settings.subtitleLanguage
+    // When OpenSubtitles' daily downloads come back, once they've run out (see SubtitleSearch).
+    property alias subtitleLimitReset: settings.subtitleLimitReset
     // What the Library and folder pages list: "folders" (sub-folders, then the folder's own
     // videos) or "videos" (every video in one grid). External and Phone have their own:
     // "drives" / "phones" (the cards) or "videos".
@@ -134,11 +138,11 @@ ApplicationWindow {
         settings.recentSearches = JSON.stringify(recentSearches.filter(s => s !== text));
     }
 
-    // 0 Home, 1 Videos, 2 Library, 3 Playlists, 4 External, 5 Phone, 6 Settings, as in the rail.
+    // 0 Home, 1 Videos, 2 Library, 3 Playlists, 4 External, 5 Phone, 6 Settings, 7 Stats, as in the rail.
     function showTab(index) {
         rail.currentIndex = index;
         contentStack.replace(null, [homePage, videosPage, libraryPage, playlistsPage, externalPage, phonePage,
-                                    settingsPage][index]);
+                                    settingsPage, statsPage][index]);
     }
 
     function showLibrary() {
@@ -172,8 +176,16 @@ ApplicationWindow {
         openOnce(historyPage, "history");
     }
 
+    // From the History page it opens on top of it, so Back goes back there; from
+    // anywhere else it's the Stats tab.
     function openStats() {
-        openOnce(statsPage, "stats");
+        if (contentStack.depth > 1) {
+            openOnce(statsPage, "stats");
+            return;
+        }
+        if (watch.mode === "watch" || watch.mode === "full")
+            watch.minimize();
+        showTab(7);
     }
 
     // A page there's only ever one of: if it's open already (further back), it's gone back to.
@@ -394,6 +406,8 @@ ApplicationWindow {
         property string subtitleSize: "medium"
         property string subtitleColor: "white"
         property string subtitleBackground: "outline"
+        property string subtitleLanguage: ""
+        property string subtitleLimitReset: ""
         property string folderView: "folders"
         property string externalView: "drives"
         property string phoneView: "phones"

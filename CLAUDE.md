@@ -22,6 +22,8 @@ powershell -File installer\build_installer.ps1   # Release build + Inno Setup ->
 
 - libmpv is not in git. It goes in `third_party/mpv/` (`include/mpv/*.h`, `libmpv-2.dll`, from the
   shinchiro mpv-dev package). CMake generates `mpv.lib` from the DLL with dumpbin at configure time.
+- The OpenSubtitles API key (online subtitle search) is not in git either: it's read from
+  `opensubtitles.key` in the repo root at configure time. Without it the feature is hidden.
 - The post-build step copies `libmpv-2.dll` and runs `windeployqt`, so the build folder runs as-is.
 - The exe is named `VesselPlayer.exe`, not `Vessel.exe`, on purpose: Xbox Game Bar treats `Vessel.exe` as a game and records it.
 - Debug is several times slower at scanning and searching than Release.

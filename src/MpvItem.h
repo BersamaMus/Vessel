@@ -40,6 +40,10 @@ class MpvItem : public QQuickFramebufferObject
     // Audio tracks: {id, label, selected}; audioId is the one playing, 0 for none.
     Q_PROPERTY(QVariantList audioTracks READ audioTracks NOTIFY tracksChanged)
     Q_PROPERTY(int audioId READ audioId NOTIFY tracksChanged)
+    // Subtitle timing: the subtitles are shown this many seconds later (earlier when it's
+    // negative) than the file says, for subtitles timed to a slightly different copy of the
+    // video. 0 is their own timing. Cleared for each file.
+    Q_PROPERTY(double subtitleDelay READ subtitleDelay WRITE setSubtitleDelay NOTIFY subtitleDelayChanged)
 
 public:
     explicit MpvItem(QQuickItem *parent = nullptr);
@@ -65,8 +69,10 @@ public:
     int subtitleId() const { return m_subtitleId; }
     QVariantList audioTracks() const { return m_audioTracks; }
     int audioId() const { return m_audioId; }
+    double subtitleDelay() const { return m_subtitleDelay; }
 
     void setPaused(bool paused);
+    void setSubtitleDelay(double delay);
     void setVolume(double volume);
     void setMuted(bool muted);
     void setSpeed(double speed);
@@ -105,12 +111,14 @@ signals:
     void loadedChanged();
     void videoInfoChanged();
     void tracksChanged();
+    void subtitleDelayChanged();
     void errorOccurred(const QString &message);
 
 private:
     friend class MpvRenderer;
 
     void processEvents();
+    void updateKeepAwake();
     void command(const QStringList &args);
     void onRendererReady();
     void onRendererGone();
@@ -147,4 +155,7 @@ private:
     int m_subtitleId = 0;
     QVariantList m_audioTracks;
     int m_audioId = 0;
+    // A moving picture is showing (not only sound, or a song's cover art).
+    bool m_hasVideo = false;
+    double m_subtitleDelay = 0;
 };

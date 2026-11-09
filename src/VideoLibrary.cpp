@@ -2055,6 +2055,55 @@ void VideoLibrary::setSubtitleChoice(const QString &path, const QString &subtitl
     scheduleSave();
 }
 
+QVariantMap VideoLibrary::downloadedSubtitles(const QString &path) const
+{
+    const QJsonObject downloads = m_history.value(keyFor(path)).toObject().value(QStringLiteral("downloads")).toObject();
+    QVariantMap found;
+    for (auto it = downloads.begin(); it != downloads.end(); ++it)
+        if (QFileInfo::exists(it.value().toString()))
+            found.insert(it.key(), it.value().toString());
+    return found;
+}
+
+void VideoLibrary::noteDownloadedSubtitle(const QString &path, int fileId, const QString &file)
+{
+    if (path.isEmpty() || fileId == 0)
+        return;
+    const QString key = keyFor(path);
+    QJsonObject entry = m_history.value(key).toObject();
+    QJsonObject downloads = entry.value(QStringLiteral("downloads")).toObject();
+    downloads.insert(QString::number(fileId), file);
+    entry.insert(QStringLiteral("downloads"), downloads);
+    m_history.insert(key, entry);
+    scheduleSave();
+}
+
+// Stored as the history entry's "timing": {track: delay in seconds}.
+double VideoLibrary::subtitleDelay(const QString &path, const QString &track) const
+{
+    return m_history.value(keyFor(path)).toObject().value(QStringLiteral("timing"))
+        .toObject().value(track).toDouble();
+}
+
+void VideoLibrary::setSubtitleDelay(const QString &path, const QString &track, double delay)
+{
+    if (path.isEmpty() || track.isEmpty())
+        return;
+    const QString key = keyFor(path);
+    QJsonObject entry = m_history.value(key).toObject();
+    QJsonObject timing = entry.value(QStringLiteral("timing")).toObject();
+    if (qAbs(delay) > 0.0005)
+        timing.insert(track, delay);
+    else
+        timing.remove(track);   // back to the file's own timing: nothing to keep
+    if (timing.isEmpty())
+        entry.remove(QStringLiteral("timing"));
+    else
+        entry.insert(QStringLiteral("timing"), timing);
+    m_history.insert(key, entry);
+    scheduleSave();
+}
+
 QString VideoLibrary::videoNameFilter() const
 {
     return VideoFormats::nameFilter();
@@ -2281,13 +2330,29 @@ void VideoLibrary::relocate(const QString &oldPath, const QString &newPath)
     // Its history (progress, subtitle and audio choices) goes with it.
     if (newKey != old.key && m_history.contains(old.key)) {
         QJsonObject entry = m_history.take(old.key).toObject();
-        // A subtitle file named after it was renamed or moved with it.
-        const QString subtitle = entry.value(QStringLiteral("subtitle")).toString();
-        if (!subtitle.isEmpty() && !QFileInfo::exists(subtitle)) {
-            const QFileInfo was(old.path), now(newPath);
+        // A subtitle file named after it was renamed or moved with it: the one chosen, and
+        // those downloaded for it.
+        const QFileInfo was(old.path), now(newPath);
+        const auto follow = [&](const QString &subtitle) {
+            if (subtitle.isEmpty() || QFileInfo::exists(subtitle))
+                return subtitle;
             const QString followed = sidecarTarget(subtitle, was.completeBaseName(), now.absolutePath(), now.completeBaseName());
-            if (QFileInfo::exists(followed))
-                entry.insert(QStringLiteral("subtitle"), followed);
+            return QFileInfo::exists(followed) ? followed : subtitle;
+        };
+        if (entry.contains(QStringLiteral("subtitle")))   // no key: not asked yet, unlike ""
+            entry.insert(QStringLiteral("subtitle"), follow(entry.value(QStringLiteral("subtitle")).toString()));
+        QJsonObject downloads = entry.value(QStringLiteral("downloads")).toObject();
+        for (auto it = downloads.begin(); it != downloads.end(); ++it)
+            it.value() = follow(it.value().toString());
+        if (!downloads.isEmpty())
+            entry.insert(QStringLiteral("downloads"), downloads);
+        // So does the timing fixed for those files ("#<id>", a built-in track, stays as it is).
+        const QJsonObject timing = entry.value(QStringLiteral("timing")).toObject();
+        if (!timing.isEmpty()) {
+            QJsonObject followed;
+            for (auto it = timing.begin(); it != timing.end(); ++it)
+                followed.insert(it.key().startsWith(QLatin1Char('#')) ? it.key() : follow(it.key()), it.value());
+            entry.insert(QStringLiteral("timing"), followed);
         }
         m_history.insert(newKey, entry);
     }
@@ -2440,10 +2505,6 @@ void VideoLibrary::addWatchTime(const QString &path, double seconds)
     DayStats &day = m_statDays[now.date()];
     day.seconds += seconds;
     day.hours[now.time().hour()] += seconds;
-
-    VideoStats &video = m_statVideos[keyFor(path)];
-    video.seconds += seconds;
-    video.title = titleOf(path);
     statsEdited();
 }
 
@@ -2451,17 +2512,13 @@ void VideoLibrary::notePlay(const QString &path)
 {
     if (path.isEmpty())
         return;
-    VideoStats &video = m_statVideos[keyFor(path)];
-    ++video.plays;
-    video.title = titleOf(path);
+    ++m_statVideos[keyFor(path)].plays;
     statsEdited();
 }
 
-void VideoLibrary::noteFinished(const QString &key, const QString &path)
+void VideoLibrary::noteFinished(const QString &key)
 {
-    VideoStats &video = m_statVideos[key];
-    ++video.finished;
-    video.title = titleOf(path);
+    ++m_statVideos[key].finished;
     statsEdited();
 }
 
@@ -2500,10 +2557,8 @@ void VideoLibrary::readStats(const QJsonObject &json)
     const QJsonObject videos = json.value(QLatin1String("videos")).toObject();
     for (auto it = videos.begin(); it != videos.end(); ++it) {
         const QJsonObject entry = it.value().toObject();
-        m_statVideos.insert(it.key(), {entry.value(QLatin1String("s")).toDouble(),
-                                       entry.value(QLatin1String("plays")).toInt(),
-                                       entry.value(QLatin1String("done")).toInt(),
-                                       entry.value(QLatin1String("title")).toString()});
+        m_statVideos.insert(it.key(), {entry.value(QLatin1String("plays")).toInt(),
+                                       entry.value(QLatin1String("done")).toInt()});
     }
 }
 
@@ -2519,7 +2574,7 @@ QJsonObject VideoLibrary::statsJson() const
     }
     QJsonObject videos;
     for (auto it = m_statVideos.cbegin(); it != m_statVideos.cend(); ++it) {
-        QJsonObject entry{{"s", it->seconds}, {"plays", it->plays}, {"title", it->title}};
+        QJsonObject entry{{"plays", it->plays}};
         if (it->finished > 0)
             entry.insert(QLatin1String("done"), it->finished);
         videos.insert(it.key(), entry);
@@ -2536,8 +2591,7 @@ QJsonObject VideoLibrary::statsJson() const
 //  since ("27 Oct 2026", "" before any watching)
 //  days: the last 30, oldest first: {label "Mon 27 Oct", day "27", seconds, today}
 //  hours: 24 totals by hour of the day; weekdays: 7, Monday first
-//  bestDay: {label, seconds}; top: the 10 most watched, {path ("" if it's not here), title,
-//  seconds, plays, thumbnail}
+//  bestDay: {label, seconds}
 QVariantMap VideoLibrary::watchStats() const
 {
     const QLocale locale = QLocale::system();
@@ -2588,25 +2642,10 @@ QVariantMap VideoLibrary::watchStats() const
                                   {"today", back == 0}});
     }
 
-    QList<QHash<QString, VideoStats>::const_iterator> top;
     int plays = 0, finished = 0;
     for (auto it = m_statVideos.cbegin(); it != m_statVideos.cend(); ++it) {
         plays += it->plays;
         finished += it->finished > 0 ? 1 : 0;
-        if (it->seconds >= kDayCounts)
-            top.append(it);
-    }
-    std::sort(top.begin(), top.end(), [](const auto &a, const auto &b) { return a->seconds > b->seconds; });
-    QVariantList topList;
-    for (const auto &t : std::as_const(top)) {
-        if (topList.size() == 10)
-            break;
-        const int index = m_byKey.value(t.key(), -1);
-        topList.append(QVariantMap{{"path", index >= 0 ? m_videos[index].path : QString()},
-                                   {"title", index >= 0 ? m_videos[index].title : t->title},
-                                   {"seconds", t->seconds},
-                                   {"plays", t->plays},
-                                   {"thumbnail", index >= 0 ? thumbnailUrl(index) : QUrl()}});
     }
 
     const qint64 since = m_statsSince;
@@ -2632,7 +2671,6 @@ QVariantMap VideoLibrary::watchStats() const
         {"weekdays", toList(weekdays)},
         {"bestDay", QVariantMap{{"label", bestDate.isValid() ? locale.toString(bestDate, QStringLiteral("ddd d MMM yyyy")) : QString()},
                                 {"seconds", best}}},
-        {"top", topList},
     };
 }
 
@@ -2735,7 +2773,7 @@ void VideoLibrary::saveProgress(const QString &path, double position, double dur
     const QString key = keyFor(path);
     QJsonObject entry = m_history.value(key).toObject();
     if (finished && !entry.value(QLatin1String("finished")).toBool())
-        noteFinished(key, path);
+        noteFinished(key);
     entry.insert(QStringLiteral("position"), position);
     entry.insert(QStringLiteral("duration"), duration);
     entry.insert(QStringLiteral("watchedAt"), now);
@@ -2825,6 +2863,32 @@ void VideoLibrary::loadState()
     m_thumbFiles.reserve(files.size());
     for (const QString &file : files)
         m_thumbFiles.insert(file.chopped(4));
+
+    removeUnusedSubtitles();
+}
+
+// Only those in Vessel's own folder (for a phone's video, or one on a read-only drive): one
+// downloaded next to its video is the user's to keep or delete, like any other file there.
+void VideoLibrary::removeUnusedSubtitles()
+{
+    const QDir folder(subtitleDownloadFolder());
+    const QFileInfoList files = folder.entryInfoList(QDir::Files);
+    if (files.isEmpty())
+        return;
+    QSet<QString> used;
+    const auto use = [&](const QJsonValue &file) {
+        if (const QString path = file.toString(); !path.isEmpty())
+            used.insert(QFileInfo(path).absoluteFilePath().toLower());
+    };
+    for (const QJsonValue &value : std::as_const(m_history)) {
+        const QJsonObject entry = value.toObject();
+        use(entry.value(QLatin1String("subtitle")));
+        for (const QJsonValue &file : entry.value(QLatin1String("downloads")).toObject())
+            use(file);
+    }
+    for (const QFileInfo &file : files)
+        if (!used.contains(file.absoluteFilePath().toLower()))
+            QFile::remove(file.absoluteFilePath());
 }
 
 void VideoLibrary::scheduleSave()

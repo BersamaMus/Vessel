@@ -3,11 +3,12 @@ import QtQuick.Controls.Basic
 import QtQuick.Shapes
 
 // The tabs down the left side of the window, as in Blimp: Home, Videos, Library,
-// Playlists, External and Phone at the top, Settings at the bottom.
+// Playlists, External, Phone and Stats at the top, Settings at the bottom.
 Rectangle {
     id: rail
 
-    // 0 Home, 1 Videos, 2 Library, 3 Playlists, 4 External, 5 Phone, 6 Settings
+    // 0 Home, 1 Videos, 2 Library, 3 Playlists, 4 External, 5 Phone, 6 Settings, 7 Stats
+    // (Stats came later, so it's numbered after Settings though it sits above it).
     property int currentIndex: 0
     signal tabClicked(int index)
 
@@ -93,6 +94,7 @@ Rectangle {
         Tab { tabIndex: 3; iconName: "playlist"; label: qsTr("Playlists") }
         Tab { tabIndex: 4; iconName: "usb"; label: qsTr("External"); badge: VideoLibrary.drives.length }
         Tab { tabIndex: 5; iconName: "smartphone"; label: qsTr("Phone"); badge: VideoLibrary.phones.length }
+        Tab { tabIndex: 7; iconName: "bar_chart"; label: qsTr("Stats") }
     }
 
     // Background work: a ring that fills as thumbnails are made, or spins while

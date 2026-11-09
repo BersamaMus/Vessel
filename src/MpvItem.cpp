@@ -9,6 +9,7 @@
 #include <QOpenGLFramebufferObject>
 #include <QPointer>
 #include <QQuickOpenGLUtils>
+#include <QQuickWindow>
 #include <QTimeZone>
 
 #include "PhoneDevices.h"
@@ -21,6 +22,10 @@ QString formatDateTime(const QDateTime &time);
 
 #include <algorithm>
 #include <vector>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -221,10 +226,42 @@ MpvItem::MpvItem(QQuickItem *parent)
         QMetaObject::invokeMethod(static_cast<MpvItem *>(ctx), &MpvItem::processEvents,
                                   Qt::QueuedConnection);
     }, this);
+
+    connect(this, &MpvItem::pausedChanged, this, &MpvItem::updateKeepAwake);
+    connect(this, &MpvItem::endedChanged, this, &MpvItem::updateKeepAwake);
+    connect(this, &MpvItem::loadedChanged, this, &MpvItem::updateKeepAwake);
+    connect(this, &MpvItem::tracksChanged, this, &MpvItem::updateKeepAwake);
+    // Minimised or not, which window it's in.
+    connect(this, &QQuickItem::windowChanged, this, [this](QQuickWindow *window) {
+        if (window)
+            connect(window, &QWindow::visibilityChanged, this, &MpvItem::updateKeepAwake,
+                    Qt::UniqueConnection);
+        updateKeepAwake();
+    });
+}
+
+// While something is playing, Windows is asked not to go to sleep, however long it
+// runs. The screen is kept on too while there's a picture to look at: a video (not
+// just music, or a song's cover art) in a window that isn't minimised. Paused,
+// finished, stopped or failed, the usual power settings apply again.
+void MpvItem::updateKeepAwake()
+{
+#ifdef Q_OS_WIN
+    const bool playing = m_loaded && !m_paused && !m_ended;
+    const bool onScreen = m_hasVideo && window() && window()->visibility() != QWindow::Minimized
+                          && window()->visibility() != QWindow::Hidden;
+    EXECUTION_STATE state = ES_CONTINUOUS;
+    if (playing)
+        state |= ES_SYSTEM_REQUIRED | (onScreen ? ES_DISPLAY_REQUIRED : 0);
+    SetThreadExecutionState(state);
+#endif
 }
 
 MpvItem::~MpvItem()
 {
+#ifdef Q_OS_WIN
+    SetThreadExecutionState(ES_CONTINUOUS);
+#endif
     mpv_set_wakeup_callback(m_mpv, nullptr, nullptr);
     // Stop right away; the core itself goes once the renderer drops its handle.
     const char *stop[] = {"stop", nullptr};
@@ -315,6 +352,12 @@ void MpvItem::processEvents()
             auto *end = static_cast<mpv_event_end_file *>(event->data);
             if (end->reason == MPV_END_FILE_REASON_ERROR)
                 emit errorOccurred(tr("Could not play this file (%1)").arg(mpv_error_string(end->error)));
+            // Whatever the reason (a broken file part-way through, a phone unplugged), nothing
+            // is playing now, so it mustn't still count as playing (see updateKeepAwake).
+            if (m_loaded) {
+                m_loaded = false;
+                emit loadedChanged();
+            }
             break;
         }
         case MPV_EVENT_COMMAND_REPLY:
@@ -376,9 +419,17 @@ void MpvItem::updateTracks(const QVariantList &tracks)
     int selected = 0;
     QVariantList audio;
     int audioSelected = 0;
+    bool hasVideo = false;
     for (const QVariant &entry : tracks) {
         const QVariantMap track = entry.toMap();
         const QString type = track.value(QStringLiteral("type")).toString();
+        if (type == QLatin1String("video")) {
+            // A song's cover art comes as a video track too, but it's a still picture.
+            hasVideo |= track.value(QStringLiteral("selected")).toBool()
+                        && !track.value(QStringLiteral("albumart")).toBool()
+                        && !track.value(QStringLiteral("image")).toBool();
+            continue;
+        }
         if (type == QLatin1String("audio")) {
             const int id = track.value(QStringLiteral("id")).toInt();
             const bool isSelected = track.value(QStringLiteral("selected")).toBool();
@@ -415,6 +466,7 @@ void MpvItem::updateTracks(const QVariantList &tracks)
     m_subtitleId = selected;
     m_audioTracks = audio;
     m_audioId = audioSelected;
+    m_hasVideo = hasVideo;
     emit tracksChanged();
 
     // The track chosen for this video last time, if the file still has it.
@@ -447,6 +499,16 @@ void MpvItem::setMpvProperty(const QString &name, const QVariant &value)
     command({"set", name, value.toString()});
 }
 
+void MpvItem::setSubtitleDelay(double delay)
+{
+    // sub-delay sticks to later files, so it's always set, even when it looks unchanged.
+    command({"set", "sub-delay", QString::number(delay, 'f', 3)});
+    if (qFuzzyCompare(1 + delay, 1 + m_subtitleDelay))
+        return;
+    m_subtitleDelay = delay;
+    emit subtitleDelayChanged();
+}
+
 void MpvItem::stop()
 {
     m_pendingPath.clear();
@@ -477,6 +539,8 @@ void MpvItem::load(const QString &path, double startSeconds, const QStringList &
     // known and the one asked for turns out to be there (see updateTracks).
     mpv_set_option_string(m_mpv, "aid", "auto");
     m_wantedAudio = audioTrack;
+    // The last file's subtitle timing doesn't carry over (the watch page sets this one's).
+    setSubtitleDelay(0);
     command({"loadfile", path});
     setPaused(false);
 }
