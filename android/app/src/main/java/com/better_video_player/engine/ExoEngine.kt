@@ -8,6 +8,7 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
@@ -45,6 +46,14 @@ class ExoEngine(context: Context) : VideoEngine {
     private var groups: List<Tracks.Group> = emptyList()
     // A file whose tracks this engine can't decode is reported once.
     private var reportedUnsupported = false
+    // The video playing, the subtitle files added to it, and the one of those to turn on once
+    // its track shows up (its path).
+    private var uri: Uri? = null
+    private var externals: List<ExternalSubtitle> = emptyList()
+    private var pendingSubtitle: String? = null
+    // See addSubtitle().
+    private var pendingAudio: Format? = null
+    private var reloadingAtEnd = false
 
     init {
         player.addListener(object : Player.Listener {
@@ -53,7 +62,11 @@ class ExoEngine(context: Context) : VideoEngine {
             }
 
             override fun onPlaybackStateChanged(state: Int) {
-                if (state == Player.STATE_ENDED) listeners.each { it.onEnded() }
+                if (state == Player.STATE_READY) reloadingAtEnd = false
+                if (state == Player.STATE_ENDED) {
+                    if (reloadingAtEnd) reloadingAtEnd = false
+                    else listeners.each { it.onEnded() }
+                }
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -62,6 +75,8 @@ class ExoEngine(context: Context) : VideoEngine {
 
             override fun onTracksChanged(tracks: Tracks) {
                 groups = tracks.groups
+                selectPendingSubtitle()
+                selectPendingAudio()
                 // A picture or sound this phone can't decode would play black or silent: say so,
                 // so mpv can take over.
                 if (reportedUnsupported || tracks.isEmpty) return
@@ -132,7 +147,8 @@ class ExoEngine(context: Context) : VideoEngine {
                 for (i in 0 until group.length) {
                     if (!group.isTrackSupported(i)) continue
                     val number = if (type == TrackType.Audio) ++audio else ++text
-                    result += TrackInfo(type, "$g:$i", trackLabel(group.getTrackFormat(i), number), group.isTrackSelected(i))
+                    val format = group.getTrackFormat(i)
+                    result += TrackInfo(type, "$g:$i", trackLabel(format, number), group.isTrackSelected(i), externalPath(format))
                 }
             }
             return result
@@ -141,17 +157,104 @@ class ExoEngine(context: Context) : VideoEngine {
     override fun addListener(listener: EngineListener) = listeners.add(listener)
     override fun removeListener(listener: EngineListener) = listeners.remove(listener)
 
-    override fun open(uri: Uri, startMs: Long) {
+    override fun open(uri: Uri, startMs: Long, subtitles: List<ExternalSubtitle>, selected: ExternalSubtitle?) {
         reportedUnsupported = false
         groups = emptyList()
+        this.uri = uri
+        externals = subtitles
+        pendingSubtitle = selected?.file?.absolutePath
+        pendingAudio = null
+        reloadingAtEnd = false
         player.repeatMode = Player.REPEAT_MODE_OFF
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .clearOverrides()
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
             .build()
-        player.setMediaItem(MediaItem.fromUri(uri), startMs)
+        player.setMediaItem(mediaItem(uri), startMs)
         player.prepare()
         player.play()
+    }
+
+    // ExoPlayer only takes subtitle files as part of the media item, so a new one means setting
+    // the video again with it, from where it is. One it already has is just turned on.
+    override fun addSubtitle(subtitle: ExternalSubtitle) {
+        val uri = uri ?: return
+        val path = subtitle.file.absolutePath
+        pendingSubtitle = path
+        // (Tracks not known yet: it's turned on when they are.)
+        if (externals.any { it.file.absolutePath == path } && (groups.isEmpty() || selectPendingSubtitle())) {
+            listeners.each { it.onChanged() }
+            return
+        }
+        externals = externals.filterNot { it.file.absolutePath == path } + subtitle
+        // Setting the video again makes new track groups, which the audio track the user picked
+        // no longer matches: it's picked again by its format once they're there.
+        pendingAudio = if (player.trackSelectionParameters.overrides.keys.any { it.type == C.TRACK_TYPE_AUDIO })
+            groups.firstOrNull { it.type == C.TRACK_TYPE_AUDIO && it.isSelected }
+                ?.let { g -> (0 until g.length).firstOrNull { g.isTrackSelected(it) }?.let(g::getTrackFormat) }
+        else null
+        // At the end, it reloads and ends again: that's not the video ending a second time.
+        reloadingAtEnd = player.playbackState == Player.STATE_ENDED
+        val playing = player.playWhenReady
+        groups = emptyList()
+        player.setMediaItem(mediaItem(uri), player.currentPosition)
+        player.prepare()
+        player.playWhenReady = playing
+    }
+
+    private fun mediaItem(uri: Uri): MediaItem = MediaItem.Builder()
+        .setUri(uri)
+        .setSubtitleConfigurations(externals.map { s ->
+            MediaItem.SubtitleConfiguration.Builder(Uri.fromFile(s.file))
+                .setId(EXTERNAL_ID + s.file.absolutePath)
+                .setMimeType(subtitleMimeType(s.file.extension))
+                .setLanguage(s.language)
+                .setLabel(s.title)
+                .build()
+        })
+        .build()
+
+    // The added subtitle file a track was made from, by the id given to it in mediaItem()
+    // (ExoPlayer may put something in front of it).
+    private fun externalPath(format: Format): String? =
+        format.id?.substringAfter(EXTERNAL_ID, "")?.takeIf { it.isNotEmpty() }
+
+    // Whether the subtitle waiting to be turned on was found (and turned on).
+    private fun selectPendingSubtitle(): Boolean {
+        val path = pendingSubtitle ?: return false
+        groups.forEach { group ->
+            if (group.type != C.TRACK_TYPE_TEXT) return@forEach
+            for (i in 0 until group.length) {
+                if (externalPath(group.getTrackFormat(i)) != path) continue
+                pendingSubtitle = null
+                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, i))
+                    .build()
+                return true
+            }
+        }
+        return false
+    }
+
+    // The audio track picked before addSubtitle() set the video again, picked again in the new
+    // track groups: the one with the same format.
+    private fun selectPendingAudio() {
+        val wanted = pendingAudio ?: return
+        if (groups.isEmpty()) return
+        pendingAudio = null
+        groups.forEach { group ->
+            if (group.type != C.TRACK_TYPE_AUDIO) return@forEach
+            for (i in 0 until group.length) {
+                val f = group.getTrackFormat(i)
+                if (f.id != wanted.id || f.language != wanted.language || f.sampleMimeType != wanted.sampleMimeType ||
+                    f.channelCount != wanted.channelCount || f.label != wanted.label) continue
+                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                    .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, i))
+                    .build()
+                return
+            }
+        }
     }
 
     override fun play() {
@@ -163,6 +266,11 @@ class ExoEngine(context: Context) : VideoEngine {
     override fun pause() = player.pause()
 
     override fun stop() {
+        uri = null
+        externals = emptyList()
+        pendingSubtitle = null
+        pendingAudio = null
+        reloadingAtEnd = false
         player.stop()
         player.clearMediaItems()
     }
@@ -189,6 +297,15 @@ class ExoEngine(context: Context) : VideoEngine {
     }
 
     override fun release() = player.release()
+}
+
+private const val EXTERNAL_ID = "vessel-subtitle|"
+
+internal fun subtitleMimeType(extension: String): String = when (extension.lowercase()) {
+    "ass", "ssa" -> MimeTypes.TEXT_SSA
+    "vtt" -> MimeTypes.TEXT_VTT
+    "ttml", "dfxp", "xml" -> MimeTypes.APPLICATION_TTML
+    else -> MimeTypes.APPLICATION_SUBRIP
 }
 
 // "English  ·  5.1"

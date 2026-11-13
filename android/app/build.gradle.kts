@@ -19,6 +19,11 @@ val vesselVersionCode: Int = vesselVersion.split('.').map(String::toInt).let { (
     major * 10000 + minor * 100 + patch
 }
 
+// The OpenSubtitles API key, for "Search online" in the subtitles sheet: the desktop app's
+// opensubtitles.key (kept out of git). Without it the feature is hidden.
+val openSubtitlesKey: String = rootProject.file("../opensubtitles.key")
+    .takeIf { it.exists() }?.readText()?.trim().orEmpty()
+
 // The release key's location and passwords, kept out of git (see the README). Every published
 // APK must be signed with this same key, or it can't update an installed Vessel.
 val keyProperties = Properties().apply {
@@ -42,6 +47,8 @@ android {
         versionName = vesselVersion
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField("String", "OPENSUBTITLES_API_KEY", "\"${openSubtitlesKey.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }
 
     signingConfigs {

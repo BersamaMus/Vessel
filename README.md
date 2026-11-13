@@ -33,7 +33,8 @@ The post-build step copies `libmpv-2.dll` and runs `windeployqt`, so the build f
 Online subtitle search needs an [OpenSubtitles API key](https://www.opensubtitles.com/consumers),
 in a file named `opensubtitles.key` next to `CMakeLists.txt` (git ignores it) or passed as
 `-DVESSEL_OPENSUBTITLES_KEY=…`. Without one, Vessel builds without that menu item. Adding the
-file later is picked up by the next build.
+file later is picked up by the next build. The Android app reads the same file (in
+`android/app/build.gradle.kts`) for its own **Search online**.
 
 You can also open the folder directly in Visual Studio or Qt Creator. Both pick up `CMakePresets.json`.
 

@@ -49,6 +49,10 @@ class MpvEngine(context: Context) : VideoEngine, MPVLib.EventObserver {
     private var trackList: List<TrackInfo> = emptyList()
     private var wasPlaying = false
     private var scrubbing = false
+    // Subtitle files for the video being opened, added once it has loaded; and the one of them
+    // to turn on (its path).
+    private var externals: List<ExternalSubtitle> = emptyList()
+    private var selectedExternal: String? = null
 
     init {
         // As mpv-android sets it up: OpenGL ES on the Surface, hardware decoding through
@@ -140,7 +144,9 @@ class MpvEngine(context: Context) : VideoEngine, MPVLib.EventObserver {
     // After release(): events still queued on the main thread must not touch mpv.
     private var released = false
 
-    override fun open(uri: Uri, startMs: Long) {
+    override fun open(uri: Uri, startMs: Long, subtitles: List<ExternalSubtitle>, selected: ExternalSubtitle?) {
+        externals = subtitles
+        selectedExternal = selected?.file?.absolutePath
         loaded = false
         opening = true
         eof = false
@@ -175,6 +181,25 @@ class MpvEngine(context: Context) : VideoEngine, MPVLib.EventObserver {
         }
         "file" -> uri.path
         else -> uri.toString()
+    }
+
+    override fun addSubtitle(subtitle: ExternalSubtitle) {
+        val path = subtitle.file.absolutePath
+        externals = externals.filterNot { it.file.absolutePath == path } + subtitle
+        selectedExternal = path
+        // Still loading: added with the rest once it has.
+        if (!loaded) return
+        // Already one of its tracks (added when it loaded, or earlier): turned on, not added again.
+        val existing = trackList.firstOrNull { it.type == TrackType.Subtitle && it.file == path }
+        if (existing != null) mpv.setPropertyString("sid", existing.id)
+        else subAdd(subtitle, select = true)
+        main.postDelayed({ if (!released) { readTracks(); changed() } }, 100)
+    }
+
+    private fun subAdd(subtitle: ExternalSubtitle, select: Boolean) {
+        // "auto" adds it without turning it on.
+        mpv.command(listOfNotNull("sub-add", subtitle.file.absolutePath, if (select) "select" else "auto",
+                                  subtitle.title, subtitle.language).toTypedArray())
     }
 
     override fun play() {
@@ -292,6 +317,7 @@ class MpvEngine(context: Context) : VideoEngine, MPVLib.EventObserver {
                 MpvEvent.MPV_EVENT_FILE_LOADED -> {
                     loaded = true
                     opening = false
+                    for (subtitle in externals) subAdd(subtitle, select = subtitle.file.absolutePath == selectedExternal)
                     readTracks()
                 }
                 // Ended before it ever loaded: mpv couldn't play it either.
@@ -332,7 +358,8 @@ class MpvEngine(context: Context) : VideoEngine, MPVLib.EventObserver {
             val channels = channelsText(mpv.getPropertyInt("track-list/$i/demux-channel-count") ?: 0)
             val label = listOf(title ?: language ?: "Track $number", if (title != null) language ?: "" else "", channels)
                 .filter { it.isNotEmpty() }.distinct().joinToString("  ·  ")
-            result += TrackInfo(type, id.toString(), label, mpv.getPropertyBoolean("track-list/$i/selected") == true)
+            result += TrackInfo(type, id.toString(), label, mpv.getPropertyBoolean("track-list/$i/selected") == true,
+                                mpv.getPropertyString("track-list/$i/external-filename"))
         }
         trackList = result
     }

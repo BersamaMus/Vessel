@@ -45,6 +45,11 @@ powershell -File installer\build_apk.ps1   # signed release -> build\installer\V
 - **Release signing:** `android/key.properties` (not in git) points at `C:\Users\musta\vessel-release.jks`.
   Every published APK must use that key or it can't update installs; keep backups of both.
   Without the file, release builds fall back to the debug key and must not be published.
+- **Subtitles from outside the video** (player sheet → Subtitles → Search online / Choose a file):
+  `data/OpenSubtitles.kt` (port of `SubtitleSearch.cpp`, key from `../opensubtitles.key` into
+  `BuildConfig`), files kept in the app's own `filesDir/subtitles` and listed per video in
+  `data/SavedSubtitles.kt`, added on every open through `VideoEngine.open(..., subtitles, selected)` /
+  `addSubtitle()`.
 - Release builds are minified with R8. Test the *release* APK before publishing: the debug build
   Android Studio runs doesn't catch R8 breakage. Release is arm64-only; debug also has x86_64 for the emulator.
 

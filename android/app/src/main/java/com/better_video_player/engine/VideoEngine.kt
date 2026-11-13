@@ -1,14 +1,20 @@
 package com.better_video_player.engine
 
 import android.net.Uri
+import java.io.File
 
 // What the player is doing.
 enum class Phase { Idle, Buffering, Ready, Ended }
 
 enum class TrackType { Audio, Subtitle }
 
-// An audio or subtitle track the user can pick.
-data class TrackInfo(val type: TrackType, val id: String, val label: String, val selected: Boolean)
+// An audio or subtitle track the user can pick. `file`: for a subtitle added from a file
+// (see ExternalSubtitle), that file's path.
+data class TrackInfo(val type: TrackType, val id: String, val label: String, val selected: Boolean, val file: String? = null)
+
+// A subtitle file added to the video (downloaded, or picked from the phone's files), shown in
+// the track list as "<title>  ·  <language>".
+data class ExternalSubtitle(val file: File, val title: String, val language: String?)
 
 // Why an engine gave up on a file: whether another engine might do better.
 data class EngineError(val message: String, val tryOtherEngine: Boolean)
@@ -49,7 +55,10 @@ interface VideoEngine {
     fun addListener(listener: EngineListener)
     fun removeListener(listener: EngineListener)
 
-    fun open(uri: Uri, startMs: Long)
+    // `subtitles` are added to the video's own tracks; `selected`, one of them, is turned on.
+    fun open(uri: Uri, startMs: Long, subtitles: List<ExternalSubtitle> = emptyList(), selected: ExternalSubtitle? = null)
+    // Adds a subtitle file to the video playing, and turns it on.
+    fun addSubtitle(subtitle: ExternalSubtitle)
     fun play()
     fun pause()
     // Stops and lets go of the file.

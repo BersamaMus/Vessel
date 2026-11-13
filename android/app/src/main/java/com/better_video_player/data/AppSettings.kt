@@ -32,6 +32,25 @@ class AppSettings(context: Context) {
     // Videos that needed mpv (ExoPlayer couldn't play them), or were switched to it by hand.
     private val mpvVideos = prefs.getStringSet("mpvVideos", emptySet())!!.toMutableSet()
 
+    // The language last searched for subtitles in ("en"); "" before the first search.
+    private val _subtitleLanguage = MutableStateFlow(prefs.getString("subtitleLanguage", "")!!)
+    val subtitleLanguage: StateFlow<String> = _subtitleLanguage
+
+    // When OpenSubtitles allows more downloads (ms since 1970), once the day's are used up;
+    // 0 if they haven't. Kept so a restart doesn't spend a request finding it again.
+    private val _subtitleLimitReset = MutableStateFlow(prefs.getLong("subtitleLimitReset", 0L))
+    val subtitleLimitReset: StateFlow<Long> = _subtitleLimitReset
+
+    fun setSubtitleLanguage(code: String) {
+        _subtitleLanguage.value = code
+        prefs.edit { putString("subtitleLanguage", code) }
+    }
+
+    fun setSubtitleLimitReset(ms: Long) {
+        _subtitleLimitReset.value = ms
+        prefs.edit { putLong("subtitleLimitReset", ms) }
+    }
+
     fun setSkipSeconds(seconds: Int) {
         _skipSeconds.value = seconds
         prefs.edit { putInt("skipSeconds", seconds) }

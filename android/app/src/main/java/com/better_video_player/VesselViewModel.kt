@@ -10,11 +10,18 @@ import com.better_video_player.data.AppSettings
 import com.better_video_player.data.Folder
 import com.better_video_player.data.MediaLibrary
 import com.better_video_player.data.NaturalOrder
+import com.better_video_player.data.OpenSubtitles
+import com.better_video_player.data.SavedSubtitle
+import com.better_video_player.data.SavedSubtitles
+import com.better_video_player.data.SubtitleException
+import com.better_video_player.data.SubtitleLimitException
+import com.better_video_player.data.SubtitleResult
 import com.better_video_player.data.Seen
 import com.better_video_player.data.Video
 import com.better_video_player.data.WatchHistory
 import com.better_video_player.engine.EngineError
 import com.better_video_player.engine.EngineListener
+import com.better_video_player.engine.ExternalSubtitle
 import com.better_video_player.engine.ExoEngine
 import com.better_video_player.engine.MpvEngine
 import com.better_video_player.engine.MpvThumbnailer
@@ -40,6 +47,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -67,6 +76,22 @@ data class Queue(
     val previous: Video? get() = if (index > 0) videos.getOrNull(index - 1) else null
 }
 
+// "Search online" in the subtitles sheet, as the sheet shows it.
+data class SubtitleSearchState(
+    val searching: Boolean = false,
+    // A search has finished (so no results means none were found, not none looked for yet).
+    val searched: Boolean = false,
+    // Those that match the file's hash first.
+    val results: List<SubtitleResult> = emptyList(),
+    // The subtitle being downloaded (its fileId), or 0.
+    val downloading: Int = 0,
+    // What went wrong; "" if nothing.
+    val error: String = "",
+)
+
+// A subtitle file bigger than this (10 MB) is something else picked by mistake.
+private const val MAX_SUBTITLE_BYTES = 10 * 1024 * 1024
+
 private data class Playlist(val name: String, val videos: List<Video>, val shuffled: Boolean)
 
 class VesselViewModel(app: Application) : AndroidViewModel(app) {
@@ -74,6 +99,8 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
     val library = MediaLibrary(app, viewModelScope)
     val history = WatchHistory(File(app.filesDir, "history.json"), viewModelScope)
     val settings = AppSettings(app)
+    val savedSubtitles = SavedSubtitles(app.filesDir, viewModelScope)
+    val openSubtitles = OpenSubtitles(app)
 
     // Thumbnails (and durations) for the videos Android can't read: see MpvThumbnailer.
     val thumbnailer = MpvThumbnailer(app, viewModelScope)
@@ -257,7 +284,10 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
                 old.stop()
             }
             _error.value = null
-            engine.open(video.uri, startMs)
+            // With the subtitles added to it before, and the one that was on.
+            val saved = savedSubtitles.get(video.key)
+            val subtitles = saved.present.map(::external)
+            engine.open(video.uri, startMs, subtitles, subtitles.firstOrNull { it.file.path == saved.chosen })
         } finally {
             switching = false
         }
@@ -338,7 +368,147 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setRepeat(on: Boolean) = player.setRepeat(on)
 
-    fun selectTrack(type: TrackType, track: TrackInfo?) = player.selectTrack(type, track)
+    fun selectTrack(type: TrackType, track: TrackInfo?) {
+        player.selectTrack(type, track)
+        // Whether one of the subtitles added to it is on, for next time.
+        val video = _current.value
+        if (type == TrackType.Subtitle && video != null) savedSubtitles.choose(video.key, track?.file)
+    }
+
+    // --- Subtitles from outside the video --------------------------------------
+    private val _subtitleSearch = MutableStateFlow(SubtitleSearchState())
+    val subtitleSearch: StateFlow<SubtitleSearchState> = _subtitleSearch
+    private var searchJob: Job? = null
+
+    private fun external(saved: SavedSubtitle) = ExternalSubtitle(saved.file, saved.title, saved.language)
+
+    // What to search for at first: the video's file name, which OpenSubtitles makes sense of
+    // by itself ("House.S01E02.720p").
+    fun subtitleQuery(video: Video): String = video.fileName.substringBeforeLast('.')
+
+    // The language to search in: the one last used, else the phone's.
+    fun subtitleLanguage(): String = settings.subtitleLanguage.value.ifEmpty { openSubtitles.systemLanguage() }
+
+    // Looks for subtitles for the video playing. Replaces any search still going.
+    fun searchSubtitles(query: String, language: String) {
+        val video = _current.value ?: return
+        settings.setSubtitleLanguage(language)
+        searchJob?.cancel()
+        _subtitleSearch.update { SubtitleSearchState(searching = true, downloading = it.downloading) }
+        searchJob = viewModelScope.launch {
+            val found = openSubtitles.search(video.uri, query, language)
+            _subtitleSearch.update { it.copy(searching = false, searched = true, results = found.results, error = found.error) }
+        }
+    }
+
+    // What the sheet that started a download wants done once it's on; dropped when that sheet
+    // closes, so a download that finishes later can't close a sheet opened since.
+    private var subtitleDone: (() -> Unit)? = null
+
+    // The sheet was closed: the search stops (a download carries on, and its subtitle still
+    // turns on).
+    fun cancelSubtitleSearch() {
+        subtitleDone = null
+        searchJob?.cancel()
+        _subtitleSearch.update { SubtitleSearchState(downloading = it.downloading) }
+    }
+
+    // Downloads a subtitle found by searchSubtitles(), keeps it for the video and turns it on;
+    // one downloaded for this video before is just turned on again, without using up a
+    // download. onDone is called once it's on. When the day's downloads are used up,
+    // settings.subtitleLimitReset says until when.
+    fun downloadSubtitle(result: SubtitleResult, onDone: () -> Unit) {
+        val video = _current.value ?: return
+        savedSubtitles.get(video.key).downloaded(result.fileId)?.let { saved ->
+            savedSubtitles.add(video.key, saved)
+            player.addSubtitle(external(saved))
+            onDone()
+            return
+        }
+        if (_subtitleSearch.value.downloading != 0) return
+        subtitleDone = onDone
+        _subtitleSearch.update { it.copy(downloading = result.fileId, error = "") }
+        viewModelScope.launch {
+            try {
+                val download = openSubtitles.download(result.fileId)
+                download.limitResetMs?.let(settings::setSubtitleLimitReset)
+                val extension = download.fileName.substringAfterLast('.', "").lowercase()
+                    .takeIf { it in SavedSubtitles.extensions } ?: "srt"
+                val language = result.languageCode.ifEmpty { null }
+                val file = withContext(Dispatchers.IO) {
+                    savedSubtitles.write(video.fileName, language, extension, download.data)
+                }
+                val saved = SavedSubtitle(file.path, result.fileId, "Downloaded", language)
+                savedSubtitles.add(video.key, saved)
+                if (_current.value?.key == video.key) {
+                    player.addSubtitle(external(saved))
+                    subtitleDone?.invoke()
+                }
+            } catch (e: SubtitleLimitException) {
+                settings.setSubtitleLimitReset(e.resetMs)
+            } catch (e: SubtitleException) {
+                _subtitleSearch.update { it.copy(error = e.message.orEmpty()) }
+            } catch (e: java.io.IOException) {
+                _subtitleSearch.update { it.copy(error = "Couldn't save the subtitle file.") }
+            } finally {
+                subtitleDone = null
+                _subtitleSearch.update { it.copy(downloading = 0) }
+            }
+        }
+    }
+
+    // A subtitle file picked from the phone's files (one downloaded in the browser, say):
+    // copied into Vessel's folder, kept for the video and turned on. onDone gets what to tell
+    // the user.
+    fun addSubtitleFile(uri: Uri, onDone: (String) -> Unit) {
+        val video = _current.value ?: return
+        viewModelScope.launch {
+            val resolver = getApplication<Application>().contentResolver
+            val outcome: Result<SavedSubtitle> = withContext(Dispatchers.IO) {
+                try {
+                    val name = resolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+                        ?.use { if (it.moveToFirst()) it.getString(0) else null }
+                        ?: uri.lastPathSegment?.substringAfterLast('/') ?: "subtitle"
+                    // Read up to one byte past the limit, so a bigger file (a video picked by
+                    // mistake) is turned away without being read whole.
+                    val data = resolver.openInputStream(uri)?.use { input ->
+                        val buffer = java.io.ByteArrayOutputStream()
+                        val chunk = ByteArray(64 * 1024)
+                        while (buffer.size() <= MAX_SUBTITLE_BYTES) {
+                            val n = input.read(chunk)
+                            if (n < 0) break
+                            buffer.write(chunk, 0, n)
+                        }
+                        buffer.toByteArray()
+                    } ?: throw java.io.IOException("No stream for $uri")
+                    if (data.size > MAX_SUBTITLE_BYTES)
+                        return@withContext Result.failure(SubtitleException("This file is too big to be a subtitle file"))
+                    // By its name if that says ("Movie.srt"); otherwise ("Movie.srt.txt", or no
+                    // extension at all, as browsers sometimes save them) by what's in it.
+                    val extension = name.substringAfterLast('.', "").lowercase().takeIf { it in SavedSubtitles.extensions }
+                        ?: SavedSubtitles.sniffExtension(data)
+                        ?: return@withContext Result.failure(
+                            SubtitleException("Not a subtitle file Vessel can read (SRT, ASS, SSA, VTT, TTML)"))
+                    val file = savedSubtitles.write(video.fileName, null, extension, data)
+                    // Its name without the endings: "Movie.en.srt.txt" -> "Movie.en".
+                    var title = name
+                    while (title.substringAfterLast('.', "").lowercase().let { it in SavedSubtitles.extensions || it == "txt" })
+                        title = title.substringBeforeLast('.')
+                    Result.success(SavedSubtitle(file.path, 0, title.ifEmpty { "Subtitle" }, null))
+                } catch (e: Exception) {
+                    android.util.Log.w("Vessel", "Couldn't add the subtitle $uri", e)
+                    Result.failure(SubtitleException("Couldn't add that file"))
+                }
+            }
+            val saved = outcome.getOrElse {
+                onDone(it.message.orEmpty())
+                return@launch
+            }
+            savedSubtitles.add(video.key, saved)
+            if (_current.value?.key == video.key) player.addSubtitle(external(saved))
+            onDone("Subtitles: ${saved.title}")
+        }
+    }
 
     fun close() {
         saveProgress()
