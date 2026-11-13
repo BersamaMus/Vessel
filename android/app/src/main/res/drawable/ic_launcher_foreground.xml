@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The app's mark, as in the desktop app's LogoMark.qml: a sailboat whose sail is a strip of
+     film (sprocket holes along the mast, a play symbol in the middle). Drawn on its 24-unit
+     grid and scaled into the middle of the adaptive icon, inside the 66dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="2.5"
+        android:scaleY="2.5"
+        android:translateX="24"
+        android:translateY="24">
+        <path
+            android:fillColor="@color/accent_text"
+            android:strokeColor="@color/accent_text"
+            android:strokeWidth="1.2"
+            android:strokeLineJoin="round"
+            android:pathData="M7,2.5 L19,15 L7,15 Z" />
+        <path
+            android:fillColor="@color/accent"
+            android:pathData="M8.55,6.3h0.8a0.35,0.35 0,0 1,0.35 0.35v0.8a0.35,0.35 0,0 1,-0.35 0.35h-0.8a0.35,0.35 0,0 1,-0.35 -0.35v-0.8a0.35,0.35 0,0 1,0.35 -0.35z M8.55,9.3h0.8a0.35,0.35 0,0 1,0.35 0.35v0.8a0.35,0.35 0,0 1,-0.35 0.35h-0.8a0.35,0.35 0,0 1,-0.35 -0.35v-0.8a0.35,0.35 0,0 1,0.35 -0.35z M8.55,12.3h0.8a0.35,0.35 0,0 1,0.35 0.35v0.8a0.35,0.35 0,0 1,-0.35 0.35h-0.8a0.35,0.35 0,0 1,-0.35 -0.35v-0.8a0.35,0.35 0,0 1,0.35 -0.35z" />
+        <path
+            android:fillColor="@color/accent"
+            android:strokeColor="@color/accent"
+            android:strokeWidth="0.6"
+            android:strokeLineJoin="round"
+            android:pathData="M11.4,10 L15,12 L11.4,14 Z" />
+        <path
+            android:fillAlpha="0.72"
+            android:fillColor="@color/accent_text"
+            android:pathData="M3,16.5 L21,16.5 Q19.5,20.5 15,20.5 L9,20.5 Q4.5,20.5 3,16.5 Z" />
+    </group>
+</vector>

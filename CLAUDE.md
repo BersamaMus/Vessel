@@ -2,8 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Vessel is an offline desktop video player: C++20, Qt 6 Quick/QML, and libmpv. Windows is the
-only platform that is built and tested in practice (MSVC, Qt at `C:\Qt\6.11.3\msvc2022_64`).
+Vessel is an offline desktop video player: C++20, Qt 6 Quick/QML, and libmpv (the Android app is
+in `android/`, see below). Windows is the only desktop platform that is built and tested in practice (MSVC, Qt at `C:\Qt\6.11.3\msvc2022_64`).
 `README.md` documents user-visible behaviour in detail (gestures, keys, library rules, subtitle
 matching, phones); read it before changing a feature, and keep it in sync when behaviour changes.
 [docs/FEATURES.md](docs/FEATURES.md) maps every feature to the files and functions that implement
@@ -28,6 +28,33 @@ powershell -File installer\build_installer.ps1   # Release build + Inno Setup ->
 - The exe is named `VesselPlayer.exe`, not `Vessel.exe`, on purpose: Xbox Game Bar treats `Vessel.exe` as a game and records it.
 - Debug is several times slower at scanning and searching than Release.
 - There are no automated tests and no linter. Check changes by building and running the app.
+
+## Android
+
+`android/` is Vessel for Android, a separate app (Kotlin, Jetpack Compose, libmpv via
+`dev.jdtech.mpv`, ExoPlayer as a second engine) that shares only the name, look and version.
+Open `android/` in Android Studio, or:
+
+```powershell
+powershell -File installer\build_apk.ps1   # signed release -> build\installer\Vessel-<ver>.apk (arm64 only)
+```
+
+- **The version comes from `CMakeLists.txt`** (`app/build.gradle.kts` reads it; versionCode is
+  `major*10000 + minor*100 + patch`). Never set it in Gradle.
+- **App ID `com.bersamamus.vessel` is permanent**; the Kotlin namespace is still `com.better_video_player`.
+- **Release signing:** `android/key.properties` (not in git) points at `C:\Users\musta\vessel-release.jks`.
+  Every published APK must use that key or it can't update installs; keep backups of both.
+  Without the file, release builds fall back to the debug key and must not be published.
+- Release builds are minified with R8. Test the *release* APK before publishing: the debug build
+  Android Studio runs doesn't catch R8 breakage. Release is arm64-only; debug also has x86_64 for the emulator.
+
+## Releasing
+
+Jeti, the launcher (`C:\BersamaMusLauncher`), installs and updates Vessel from the
+BersamaMus/Vessel GitHub release marked latest, on Windows and on Android, and fails if that
+release lacks its file. So **every release ships both**: run `installer\build_installer.ps1`
+and `installer\build_apk.ps1`, tag `v<version>`, and attach them renamed to `Vessel-Setup.exe`
+and `Vessel.apk`. The site (`C:\BersamaMusWebsite`, `src/content/projects/vessel.md`) lists them for Jeti.
 
 When running the app for testing, set `VESSEL_DATA_DIR=<folder>` so it uses separate settings,
 history, playlists and thumbnails (it also gets its own single-instance window and skips the
@@ -73,4 +100,4 @@ file-type registration). `QT_LOGGING_RULES=vessel.perf.debug=true` logs scan and
 - Commit messages are one sentence-case line about the user-visible change, with no prefix
   (e.g. "Playlists: a Playlists tab, Save to playlist from any video, …"). A release is its own
   commit, "Vessel X.Y.Z", which only bumps `project(... VERSION ...)` in `CMakeLists.txt` (the
-  installer reads the version from there).
+  installer and the Android build read the version from there).
