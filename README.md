@@ -5,7 +5,7 @@ already on your PC, your drives and your phone into a library: no accounts, no
 ads, and it works offline.
 
 <p>
-  <img src="docs/img/windows-home.png" alt="Vessel on Windows, showing Continue watching, recently added videos and library folders">
+  <img src="docs/img/windows-home.png" alt="Vessel on Windows, showing Continue watching and Quick picks, with the tabs down the side">
 </p>
 <p>
   <img src="docs/img/windows-watch.png" width="49%" alt="Vessel's watch page, with the video, its details and the rest of the folder up next">
@@ -77,6 +77,8 @@ For testing and profiling:
 
 - `VESSEL_DATA_DIR=<folder>` points the app at its own settings, history and thumbnail cache, so a
   test copy can't touch your real ones.
+- `VESSEL_LIBRARY_DIR=<folder>` makes that one folder the whole library (and the Videos folder),
+  instead of the computer's drives: for a test copy, or screenshots with demo videos.
 - `QT_LOGGING_RULES=vessel.perf.debug=true` logs how long scans and library updates take.
 
 ### Installer and Android

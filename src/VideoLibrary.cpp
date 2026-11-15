@@ -726,6 +726,10 @@ VideoLibrary::VideoLibrary(QObject *parent)
     connect(m_thumbnailer, &Thumbnailer::finished, this, &VideoLibrary::onThumbnailFinished);
 
     m_videosFolder = QDir::cleanPath(QStandardPaths::writableLocation(QStandardPaths::MoviesLocation));
+    // VESSEL_LIBRARY_DIR makes one folder the whole library and the Videos folder, for a
+    // test copy or screenshots that shouldn't show this computer's own videos.
+    if (qEnvironmentVariableIsSet("VESSEL_LIBRARY_DIR"))
+        m_videosFolder = QDir::cleanPath(QDir::fromNativeSeparators(qEnvironmentVariable("VESSEL_LIBRARY_DIR")));
     {
         // Library folders were chosen in Settings before the library was the whole computer.
         QSettings settings(m_dataDir + QStringLiteral("/settings.ini"), QSettings::IniFormat);
@@ -857,7 +861,9 @@ void VideoLibrary::updateLibrarySources()
     // The computer's own drives; elsewhere, the home folder. And the Videos folder, if it's
     // somewhere else (a network drive).
     QList<VideoSource> wanted;
-    const QList<DriveInfo> internal = m_driveWatcher->internalDrives();
+    // With VESSEL_LIBRARY_DIR, just that folder (it's the Videos folder, added below).
+    const QList<DriveInfo> internal = qEnvironmentVariableIsSet("VESSEL_LIBRARY_DIR")
+        ? QList<DriveInfo>() : m_driveWatcher->internalDrives();
     for (const DriveInfo &drive : internal) {
         VideoSource source;
         source.path = drive.rootPath;
