@@ -306,10 +306,64 @@ Item {
                 }
             }
 
+            // --- Updates -----------------------------------------------------------
+            SectionTitle { text: qsTr("Updates") }
+
+            // Check for updates on / off.
+            AbstractButton {
+                id: updatesRow
+
+                readonly property bool on: page.app?.checkForUpdates ?? false
+
+                Layout.fillWidth: true
+                Layout.leftMargin: Theme.pagePadding
+                Layout.rightMargin: Theme.pagePadding
+                Layout.topMargin: 14
+                hoverEnabled: true
+                focusPolicy: Qt.NoFocus
+                padding: 14
+                onClicked: page.app.checkForUpdates = !on
+
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+
+                background: Rectangle {
+                    radius: Theme.radiusCard
+                    color: updatesRow.hovered ? Theme.surfaceHigh : Theme.surface
+                    border.color: Theme.borderSoft
+                }
+
+                contentItem: RowLayout {
+                    spacing: 14
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 2
+                        Text {
+                            text: qsTr("Check for updates")
+                            color: Theme.textPrimary
+                            font.pixelSize: 15
+                            font.weight: Font.DemiBold
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("Each time Vessel opens, it asks GitHub whether a newer version is out. Nothing about you or your videos is sent.")
+                            color: Theme.textSecondary
+                            font.pixelSize: 13
+                            wrapMode: Text.Wrap
+                        }
+                    }
+
+                    AppSwitch {
+                        checked: updatesRow.on
+                        onClicked: page.app.checkForUpdates = !updatesRow.on
+                    }
+                }
+            }
+
             // --- About -------------------------------------------------------------
             SectionTitle { text: qsTr("About") }
             Note {
-                text: qsTr("Vessel %1. Plays the videos on this computer, on drives you plug in and on phones connected by USB. It never goes online.")
+                text: qsTr("Vessel %1. Plays the videos on this computer, on drives you plug in and on phones connected by USB. It only goes online to check for updates, and to search for subtitles when you ask.")
                       .arg(Qt.application.version)
             }
 

@@ -205,8 +205,18 @@ Almost all of it is [WatchView.qml](../qml/WatchView.qml), sectioned with `// --
 
 ### Settings
 [SettingsPage.qml](../qml/SettingsPage.qml): Library (rescan), Player (skip seconds, autoplay),
-Subtitles (look, with a live preview), Default video player, About. The values are aliases on
-the root of [Main.qml](../qml/Main.qml).
+Subtitles (look, with a live preview), Default video player, Updates, About. The values are
+aliases on the root of [Main.qml](../qml/Main.qml).
+
+### Update check
+| What | Where |
+|---|---|
+| Asking GitHub's API for the latest release when the app opens, comparing versions | [UpdateCheck.cpp](../src/UpdateCheck.cpp) (`check()`, `isNewer()`), called from `Component.onCompleted` in [Main.qml](../qml/Main.qml) |
+| The "Vessel x.y.z is out" notice, whose Download opens the releases page | `UpdateCheck { onNewerVersionFound }` in Main.qml → `toast()` |
+| Settings > Updates > Check for updates (`checkForUpdates` in `settings.ini`, on by default) | [SettingsPage.qml](../qml/SettingsPage.qml) |
+| Android: the same check, setting and a bar above the tabs | `data/UpdateCheck.kt`, `VesselViewModel.newerVersion`, `UpdateNotice` in `ui/VesselApp.kt`, `AppSettings.checkForUpdates` |
+
+Release tags must stay `vX.Y.Z` for it (and Jeti) to read them. Blimp and Glide check the same way.
 
 ### Look and shared components
 | What | Where |

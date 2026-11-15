@@ -5,3 +5,6 @@ CMakeUserPresets.json
 *.user
 .idea/
 opensubtitles.key
+
+# Kept on this PC, not on GitHub: notes for Claude (as in Blimp and Glide).
+/CLAUDE.md

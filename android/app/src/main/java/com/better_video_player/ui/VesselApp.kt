@@ -1,6 +1,7 @@
 package com.better_video_player.ui
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsBottomHeight
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
@@ -53,10 +55,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.better_video_player.VesselViewModel
+import com.better_video_player.data.UpdateCheck
 import com.better_video_player.data.Video
 import com.better_video_player.data.durationText
 import com.better_video_player.ui.player.WatchLayer
@@ -69,6 +73,7 @@ import com.better_video_player.ui.screens.LibraryScreen
 import com.better_video_player.ui.screens.SearchScreen
 import com.better_video_player.ui.screens.SettingsScreen
 import com.better_video_player.ui.screens.VideosScreen
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 // The tabs along the bottom (the desktop app's side rail).
@@ -154,6 +159,7 @@ fun VesselApp(vm: VesselViewModel) {
                                 Route.History -> HistoryScreen(vm, bottomPadding, back)
                             }
                         }
+                        UpdateNotice(vm, Modifier.align(Alignment.BottomCenter).padding(bottom = bottomPadding))
                     }
                     NavigationBar(
                         Modifier.onSizeChanged { navHeightPx = it.height },
@@ -192,6 +198,32 @@ fun VesselApp(vm: VesselViewModel) {
                 actions.openFolder(video.folder)
             })
         }
+    }
+}
+
+// Says so when a newer Vessel is out, with a link to download it: a bar above the tabs, gone
+// after ten seconds or once it's used.
+@Composable
+private fun UpdateNotice(vm: VesselViewModel, modifier: Modifier = Modifier) {
+    val version by vm.newerVersion.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val latest = version ?: return
+    LaunchedEffect(latest) {
+        delay(10_000)
+        vm.dismissUpdate()
+    }
+    Row(modifier.padding(12.dp).fillMaxWidth().background(Palette.surfaceHigh, RoundedCornerShape(Metrics.radiusCard))
+            .padding(start = 16.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text("Vessel $latest is out", Modifier.weight(1f), color = Palette.textPrimary, fontSize = 14.sp)
+        TextAction("Download", {
+            vm.dismissUpdate()
+            try {
+                context.startActivity(Intent(Intent.ACTION_VIEW, UpdateCheck.RELEASES_PAGE.toUri()))
+            } catch (e: ActivityNotFoundException) {
+                // No browser to open it with.
+            }
+        })
     }
 }
 

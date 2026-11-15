@@ -180,6 +180,7 @@ fun SettingsScreen(vm: VesselViewModel, bottomPadding: Dp, onOpenHistory: () -> 
     val alwaysMpv by vm.settings.alwaysMpv.collectAsStateWithLifecycle()
     val backgroundPlay by vm.settings.backgroundPlay.collectAsStateWithLifecycle()
     val pictureInPicture by vm.settings.pictureInPicture.collectAsStateWithLifecycle()
+    val checkForUpdates by vm.settings.checkForUpdates.collectAsStateWithLifecycle()
     val scroll = rememberScrollState()
 
     Column(Modifier.fillMaxSize()) {
@@ -246,6 +247,15 @@ fun SettingsScreen(vm: VesselViewModel, bottomPadding: Dp, onOpenHistory: () -> 
                 AppIcon(AppIcons.history, tint = Palette.accent)
                 Text("Watch history", Modifier.weight(1f), color = Palette.textPrimary, fontSize = 15.sp)
                 AppIcon(AppIcons.chevronRight, tint = Palette.textTertiary)
+            }
+
+            SectionTitle("Updates")
+            Row(Modifier.clickable { vm.settings.setCheckForUpdates(!checkForUpdates) }, verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Check for updates", color = Palette.textPrimary, fontSize = 15.sp)
+                    Note("Each time Vessel opens, it asks GitHub whether a newer version is out. Nothing about you or your videos is sent.")
+                }
+                Switch(checkForUpdates, { vm.settings.setCheckForUpdates(it) }, colors = switchColors())
             }
 
             SectionTitle("About")

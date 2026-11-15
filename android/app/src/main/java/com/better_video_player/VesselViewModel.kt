@@ -17,6 +17,7 @@ import com.better_video_player.data.SubtitleException
 import com.better_video_player.data.SubtitleLimitException
 import com.better_video_player.data.SubtitleResult
 import com.better_video_player.data.Seen
+import com.better_video_player.data.UpdateCheck
 import com.better_video_player.data.Video
 import com.better_video_player.data.WatchHistory
 import com.better_video_player.engine.EngineError
@@ -200,6 +201,11 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
     val error: StateFlow<String?> = _error
 
     // A brief note over the video when the engine changes by itself ("Playing with mpv").
+    // A newer Vessel that's out ("1.7.0"), for the notice that offers it; null when there
+    // isn't one, or the notice has been closed.
+    private val _newerVersion = MutableStateFlow<String?>(null)
+    val newerVersion: StateFlow<String?> = _newerVersion
+
     private val _notice = MutableStateFlow("")
     val notice: StateFlow<String> = _notice
 
@@ -251,6 +257,11 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
         Thumbnails.fallback = thumbnailer::thumbnail
         PlaybackService.player = sessionPlayer
         sessionController = MediaController.Builder(app, SessionToken(app, ComponentName(app, PlaybackService::class.java))).buildAsync()
+        if (settings.checkForUpdates.value) viewModelScope.launch { _newerVersion.value = UpdateCheck.newerVersion() }
+    }
+
+    fun dismissUpdate() {
+        _newerVersion.value = null
     }
 
     // Whether leaving the app now should shrink the video into a picture-in-picture window.

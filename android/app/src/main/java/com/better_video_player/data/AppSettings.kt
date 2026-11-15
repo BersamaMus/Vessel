@@ -29,6 +29,10 @@ class AppSettings(context: Context) {
     private val _alwaysMpv = MutableStateFlow(prefs.getBoolean("alwaysMpv", false))
     val alwaysMpv: StateFlow<Boolean> = _alwaysMpv
 
+    // Ask GitHub whether a newer Vessel is out, each time the app opens (see UpdateCheck).
+    private val _checkForUpdates = MutableStateFlow(prefs.getBoolean("checkForUpdates", true))
+    val checkForUpdates: StateFlow<Boolean> = _checkForUpdates
+
     // Videos that needed mpv (ExoPlayer couldn't play them), or were switched to it by hand.
     private val mpvVideos = prefs.getStringSet("mpvVideos", emptySet())!!.toMutableSet()
 
@@ -74,6 +78,11 @@ class AppSettings(context: Context) {
     fun setAlwaysMpv(on: Boolean) {
         _alwaysMpv.value = on
         prefs.edit { putBoolean("alwaysMpv", on) }
+    }
+
+    fun setCheckForUpdates(on: Boolean) {
+        _checkForUpdates.value = on
+        prefs.edit { putBoolean("checkForUpdates", on) }
     }
 
     fun usesMpv(key: String) = key in mpvVideos

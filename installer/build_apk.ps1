@@ -22,6 +22,8 @@ $apkName = "Vessel-$version.apk"
 if (-not (Test-Path "$root\android\key.properties")) {
   if (-not $AllowDebugKey) { throw 'No android\key.properties: the APK would be signed with the debug key. Add the file (see the README), or pass -AllowDebugKey for a test build.' }
   Write-Warning 'No android\key.properties: signing with the debug key. Do not publish this APK.'
+  # Gradle refuses a release build without the key unless it's told this is a test build.
+  $env:VESSEL_DEBUG_SIGNED_RELEASE = '1'
   $apkName = "Vessel-$version-debugkey.apk"
 }
 

@@ -1,10 +1,42 @@
 # Vessel
 
-Offline-first video player built with C++20, Qt 6 (Qt Quick/QML) and libmpv
-(which bundles FFmpeg for demuxing/decoding). The look follows Blimp: black
+Vessel is an offline video player for Windows and Android. It turns the videos
+already on your PC, your drives and your phone into a library: no accounts, no
+ads, and it works offline.
+
+<p>
+  <img src="docs/img/windows-home.png" alt="Vessel on Windows, showing Continue watching, recently added videos and library folders">
+</p>
+<p>
+  <img src="docs/img/windows-watch.png" width="49%" alt="Vessel's watch page, with the video, its details and the rest of the folder up next">
+  <img src="docs/img/windows-folder.png" width="49%" alt="A folder in Vessel, showing its videos as a grid of thumbnails, with the mini player in the corner">
+</p>
+
+## Download
+
+**Windows 10 and 11:** get `Vessel-Setup.exe` from the
+[latest release](../../releases/latest), or install it with
+[Jeti](https://github.com/BersamaMus/Jeti), which keeps it up to date.
+
+Windows may warn that the installer is from an unknown publisher. Click
+**More info**, then **Run anyway**.
+
+**Android 10 and up:** get `Vessel.apk` from the same release, or install it with
+Jeti for Android. The first time, Android asks you to let your browser (or Jeti)
+install apps.
+
+**Private:** Vessel collects nothing. It only goes online to ask GitHub whether
+a newer version is out when it opens, and to search for subtitles when you ask.
+See the [privacy policy](https://bersamamus.com/vessel/privacy).
+
+## Building
+
+Vessel for Windows is built with C++20, Qt 6 (Qt Quick/QML) and libmpv (which
+bundles FFmpeg for demuxing/decoding). The Android app, in `android/`, is Kotlin
+and Jetpack Compose, with ExoPlayer and libmpv. The look follows Blimp: black
 surfaces with a light purple accent.
 
-## Dependencies (Windows)
+### Dependencies (Windows)
 
 | Dependency | Location | Source |
 |---|---|---|
@@ -15,7 +47,7 @@ surfaces with a light purple accent.
 CMake generates the MSVC import library (`mpv.lib`) from `libmpv-2.dll` at configure time.
 A different Qt location can be set by overriding `CMAKE_PREFIX_PATH` in a `CMakeUserPresets.json`.
 
-## Build
+### Build
 
 From a *Developer PowerShell for VS*:
 
@@ -46,6 +78,32 @@ For testing and profiling:
 - `VESSEL_DATA_DIR=<folder>` points the app at its own settings, history and thumbnail cache, so a
   test copy can't touch your real ones.
 - `QT_LOGGING_RULES=vessel.perf.debug=true` logs how long scans and library updates take.
+
+### Installer and Android
+
+```powershell
+powershell -File installer\build_installer.ps1   # build\installer\Vessel-Setup-<version>.exe (needs Inno Setup)
+powershell -File installer\build_apk.ps1         # build\installer\Vessel-<version>.apk
+```
+
+Release APKs are signed with Vessel's own key, which `android/key.properties`
+describes (kept out of Git, as is the key). Every APK must be signed with that
+same key, or Android won't let it update the Vessel already installed, so keep a
+backup of both. Without a complete `key.properties`, release builds stop with an
+error. To try one out anyway, run `build_apk.ps1 -AllowDebugKey` (or set
+`VESSEL_DEBUG_SIGNED_RELEASE=1`) and it's signed with the debug key (never
+publish that APK).
+
+### Releasing
+
+1. Raise the version in `project(Vessel VERSION x.y.z ...)` in `CMakeLists.txt`;
+   the installer and the Android app both read it from there.
+2. Run `installer\build_installer.ps1` and `installer\build_apk.ps1`.
+3. Make a release tagged `v` plus the version (`v1.6.0`), and attach the
+   installer renamed to `Vessel-Setup.exe` and the APK renamed to `Vessel.apk`.
+   Jeti, on Windows and Android, then offers the update to everyone who has
+   Vessel, and Vessel itself says a new version is out when it opens. Both read
+   the tag, so keep it `vX.Y.Z`.
 
 ## The player
 
@@ -104,8 +162,8 @@ optional language tag (`Movie.en.srt`); or the same episode (`S01E02`, `1x02`, "
 to the video count too. The subtitles button on the video lists every track, built-in or from a
 file, and can add a subtitle file by hand.
 
-**Search online…** in the same menu looks for subtitles on OpenSubtitles.com, the only time
-Vessel goes online, and only when you ask. It searches by the video's title (which you can edit)
+**Search online…** in the same menu looks for subtitles on OpenSubtitles.com, and only when you
+ask (the one other time Vessel goes online is its [update check](#updates)). It searches by the video's title (which you can edit)
 in the language you pick (Windows' own at first, then the last one used), and by a fingerprint of
 the file: the hash OpenSubtitles uses, made from its size and its first and last 64 KB. Subtitles
 that match the fingerprint were made for that exact file, so they're in sync; they're listed
@@ -200,6 +258,14 @@ the app's folder before it was renamed, the first time Vessel runs):
 
 Delete `metadata.json` and `thumbnails\` to rebuild the thumbnails.
 
+## Updates
+
+Each time Vessel opens, on Windows and on Android, it asks GitHub whether a newer version is
+out, and says so if there is one ("Vessel 1.7.0 is out"), with **Download** opening the
+[latest release](https://github.com/BersamaMus/Vessel/releases/latest). Only the question is
+sent: nothing about you or your videos. Turn it off with **Check for updates** in Settings. It
+reads the release's tag, so tags must stay `vX.Y.Z`.
+
 ## Phones (Smartphone tab)
 
 A phone connected by USB doesn't get a drive letter: Android phones speak MTP (iPhones PTP),
@@ -240,3 +306,8 @@ card says so. Windows only, for now.
   live in `Theme.qml`. Icons are Material Icons (Apache 2.0) path data in `Icons.js`, drawn with
   `QtQuick.Shapes` so they take any colour. Lists that can hold thousands of videos (folder
   pages, search results) are `GridView`s, which only create the cards on screen.
+
+## Licence
+
+Vessel is free software, released under the [GNU General Public License v3.0](LICENSE): you may use, change and share it, as long as what you share stays under the same licence. Icons are Material Icons (Apache 2.0).
+

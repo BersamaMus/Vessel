@@ -25,10 +25,33 @@ val openSubtitlesKey: String = rootProject.file("../opensubtitles.key")
     .takeIf { it.exists() }?.readText()?.trim().orEmpty()
 
 // The release key's location and passwords, kept out of git (see the README). Every published
-// APK must be signed with this same key, or it can't update an installed Vessel.
-val keyProperties = Properties().apply {
+// APK must be signed with this same key, or it can't update an installed Vessel. So a release
+// build without a usable key.properties stops with an error rather than quietly signing with
+// the debug key. To try out a release build anyway, set VESSEL_DEBUG_SIGNED_RELEASE=1.
+val keyProperties = Properties()
+val releaseKeyProblem: String? = run {
     val file = rootProject.file("key.properties")
-    if (file.exists()) file.inputStream().use(::load)
+    if (!file.exists()) return@run "android/key.properties is missing."
+    file.inputStream().use { keyProperties.load(it) }
+    val missing = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+        .filter { keyProperties.getProperty(it).isNullOrBlank() }
+    if (missing.isNotEmpty()) return@run "android/key.properties has no ${missing.joinToString()}."
+    val store = project.file(keyProperties.getProperty("storeFile"))
+    if (!store.exists()) return@run "The key in android/key.properties isn't there: $store"
+    null
+}
+val debugSignedReleaseAllowed = System.getenv("VESSEL_DEBUG_SIGNED_RELEASE") == "1"
+
+// Debug builds never need the release key; only stop a release build that would otherwise be
+// signed with the debug key.
+gradle.taskGraph.whenReady {
+    val buildsRelease = allTasks.any { it.project == project && it.name.endsWith("Release") }
+    if (buildsRelease && releaseKeyProblem != null && !debugSignedReleaseAllowed) {
+        throw GradleException(
+            "Can't sign a release build with Vessel's key: $releaseKeyProblem " +
+                "Set VESSEL_DEBUG_SIGNED_RELEASE=1 to sign it with the debug key instead (never publish that APK)."
+        )
+    }
 }
 
 android {
@@ -52,7 +75,7 @@ android {
     }
 
     signingConfigs {
-        if (keyProperties.isNotEmpty()) {
+        if (releaseKeyProblem == null) {
             create("release") {
                 storeFile = file(keyProperties.getProperty("storeFile"))
                 storePassword = keyProperties.getProperty("storePassword")
@@ -74,8 +97,8 @@ android {
             ndk {
                 abiFilters += listOf("arm64-v8a")
             }
-            // Without key.properties, the debug key: fine for trying a release build out,
-            // never for publishing.
+            // The debug key only with VESSEL_DEBUG_SIGNED_RELEASE=1 (see above): fine for
+            // trying a release build out, never for publishing.
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             // R8 shrinks the whole app, not only its libraries: limiting it to androidx/kotlin
             // (packageScope) made the release build crash at launch with an IllegalAccessError,
@@ -86,8 +109,8 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
     buildFeatures {
         compose = true

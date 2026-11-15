@@ -130,6 +130,7 @@ qt_add_qml_module(VesselPlayer
         src/FolderWatcher.cpp src/FolderWatcher.h
         src/SystemIntegration.cpp src/SystemIntegration.h
         src/SubtitleSearch.cpp src/SubtitleSearch.h
+        src/UpdateCheck.cpp src/UpdateCheck.h
 )
 
 target_include_directories(VesselPlayer PRIVATE src)

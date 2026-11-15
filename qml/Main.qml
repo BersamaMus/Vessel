@@ -14,6 +14,8 @@ ApplicationWindow {
     property alias skipSeconds: settings.skipSeconds
     // Play the next video in the folder when one ends.
     property alias autoplay: settings.autoplay
+    // Ask GitHub whether a newer Vessel is out, each time the app opens (see UpdateCheck).
+    property alias checkForUpdates: settings.checkForUpdates
     // Subtitles: size "small" / "medium" / "large" / "xlarge", colour "white" / "yellow",
     // background "outline" / "box" / "none" (see WatchView.applySubtitleStyle).
     property alias subtitleSize: settings.subtitleSize
@@ -403,6 +405,7 @@ ApplicationWindow {
         property real volume: 100
         property int skipSeconds: 10
         property bool autoplay: true
+        property bool checkForUpdates: true
         property string subtitleSize: "medium"
         property string subtitleColor: "white"
         property string subtitleBackground: "outline"
@@ -1029,8 +1032,19 @@ ApplicationWindow {
         }
     }
 
+    // Says so when a newer Vessel is out, with a link to download it.
+    UpdateCheck {
+        id: updateCheck
+        onNewerVersionFound: version => window.toast(qsTr("Vessel %1 is out").arg(version),
+                                                     { icon: "download", actionText: qsTr("Download"),
+                                                       action: () => Qt.openUrlExternally(updateCheck.releasesPage),
+                                                       duration: 10000 })
+    }
+
     Component.onCompleted: {
         if (startFile)
             play(startFile);
+        if (settings.checkForUpdates)
+            updateCheck.check();
     }
 }

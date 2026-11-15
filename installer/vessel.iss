@@ -7,12 +7,14 @@
 #endif
 
 [Setup]
-; Identifies Vessel to Windows across versions, so updates replace it. Never change it.
+; Identifies Vessel to Windows across versions, so updates replace it, and tells Jeti (the
+; launcher) which version is installed. Never change it.
 AppId={{14511018-0484-46FB-905B-0B525556D64C}
 AppName=Vessel
 AppVersion={#AppVersion}
 AppVerName=Vessel {#AppVersion}
-AppPublisher=Vessel
+AppPublisher=BersamaMus
+AppPublisherURL=https://bersamamus.com/vessel
 VersionInfoVersion={#AppVersion}
 DefaultDirName={autopf}\Vessel
 DefaultGroupName=Vessel
