@@ -7,6 +7,8 @@ import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Rect
+import android.media.AudioManager
+import android.view.KeyEvent
 import android.os.Build
 import android.os.Bundle
 import android.util.Rational
@@ -101,12 +103,63 @@ class MainActivity : ComponentActivity() {
         if (!isInPictureInPictureMode && lifecycle.currentState == Lifecycle.State.CREATED) vm.onPictureInPictureClosed()
     }
 
+    // The volume keys, while a video is open: past the phone's maximum, Volume up boosts the
+    // sound (to 200%, as the desktop's volume goes), and Volume down takes the boost off before
+    // the phone's own volume. Otherwise they work as usual.
+    private var boostKey = 0
+    // When the boost last changed (KeyEvent.eventTime), to pace it while the key is held.
+    private var boostedAt = 0L
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val code = event.keyCode
+        if (code == KeyEvent.KEYCODE_VOLUME_UP || code == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            if (event.action == KeyEvent.ACTION_DOWN && vm.current.value != null) {
+                val audio = getSystemService(AudioManager::class.java)
+                val atMax = audio.getStreamVolume(AudioManager.STREAM_MUSIC) >= audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                val boost = vm.volumeBoost.value
+                val step = when {
+                    code == KeyEvent.KEYCODE_VOLUME_UP && atMax -> 10
+                    code == KeyEvent.KEYCODE_VOLUME_DOWN && boost > 100 -> -10
+                    else -> 0
+                }
+                if (event.repeatCount > 0) {
+                    // Held down. A press that turned the phone's own volume up carries on doing
+                    // that, and doesn't run on into the boost: that takes a press of its own.
+                    if (boostKey != code) return super.dispatchKeyEvent(event)
+                    // One that changes the boost goes on a step at a time, slower than the key
+                    // repeats (which would take it to 200% in half a second), and stops at the
+                    // end of it rather than running on into the phone's own volume.
+                    if (step != 0 && event.eventTime - boostedAt >= BOOST_REPEAT_MS) {
+                        vm.boostVolume(step)
+                        boostedAt = event.eventTime
+                    }
+                    return true
+                }
+                if (step != 0) {
+                    vm.boostVolume(step)
+                    boostKey = code
+                    boostedAt = event.eventTime
+                    return true
+                }
+                boostKey = 0
+            } else if (event.action == KeyEvent.ACTION_UP && boostKey == code) {
+                // Its release too, so the system doesn't act on half a key press.
+                boostKey = 0
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onStop() {
         super.onStop()
         if (!isChangingConfigurations) vm.onAppStopped(isInPictureInPictureMode)
     }
 
     companion object {
+        // While a volume key is held, the boost changes by a step this often (ms).
+        private const val BOOST_REPEAT_MS = 250L
+
         // Phones, rather than tablets.
         fun isPhone(activity: Activity) = activity.resources.configuration.smallestScreenWidthDp < 600
 

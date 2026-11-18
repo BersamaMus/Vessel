@@ -61,6 +61,25 @@ class WatchHistory(private val file: File, private val scope: CoroutineScope) {
         scheduleSave()
     }
 
+    // Undo: puts back what an edit replaced. null means the video had no entry.
+    fun restore(key: String, seen: Seen?) {
+        _entries.update { if (seen == null) it - key else it + (key to seen) }
+        scheduleSave()
+    }
+
+    // Undo for clear().
+    fun restoreAll(entries: Map<String, Seen>) {
+        _entries.update { entries + it }
+        scheduleSave()
+    }
+
+    // The video was renamed or moved: its history goes with it.
+    fun relocate(from: String, to: String) {
+        val seen = get(from) ?: return
+        _entries.update { it - from + (to to seen) }
+        scheduleSave()
+    }
+
     private fun put(key: String, seen: Seen) {
         _entries.update { it + (key to seen) }
         scheduleSave()

@@ -97,7 +97,7 @@ class MediaLibrary(private val context: Context, private val scope: CoroutineSco
             MediaStore.Video.Media.DATE_TAKEN,
             MediaStore.Video.Media.MIME_TYPE,
             MediaStore.Video.Media.ORIENTATION,
-        )
+        ) + (if (Build.VERSION.SDK_INT >= 30) arrayOf(MediaStore.MediaColumns.YEAR) else emptyArray())
         val result = ArrayList<Video>()
         // Each volume (the phone's storage, SD cards, USB drives) on its own: the combined
         // "external" view leaves out removable drives for apps on some Android versions.
@@ -125,6 +125,7 @@ class MediaLibrary(private val context: Context, private val scope: CoroutineSco
             val taken = c.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_TAKEN)
             val mime = c.getColumnIndexOrThrow(MediaStore.Video.Media.MIME_TYPE)
             val orientation = c.getColumnIndexOrThrow(MediaStore.Video.Media.ORIENTATION)
+            val tagYear = if (Build.VERSION.SDK_INT >= 30) c.getColumnIndex(MediaStore.MediaColumns.YEAR) else -1
             while (c.moveToNext()) {
                 val fileName = c.getString(name) ?: continue
                 val volumeName = c.getString(volume) ?: MediaStore.VOLUME_EXTERNAL_PRIMARY
@@ -147,6 +148,8 @@ class MediaLibrary(private val context: Context, private val scope: CoroutineSco
                     modifiedMs = c.getLong(modified) * 1000,
                     takenMs = c.getLong(taken),
                     mimeType = c.getString(mime) ?: "",
+                    year = yearIn(fileName.substringBeforeLast('.')).takeIf { it > 0 }
+                        ?: (if (tagYear >= 0) c.getInt(tagYear).takeIf { it in 1900..2100 } else null) ?: 0,
                 )
             }
         }

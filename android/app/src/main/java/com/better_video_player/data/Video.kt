@@ -23,7 +23,12 @@ data class Video(
     // When it was recorded (a camera's videos); 0 when not known.
     val takenMs: Long,
     val mimeType: String,
+    // The release year: from the file name ("Speed (1994)"), else its tags; 0 if neither says.
+    val year: Int = 0,
 ) {
+    // "mp4"
+    val type: String get() = fileName.substringAfterLast('.', "").lowercase()
+
     // Identifies the folder across rescans.
     val folder: String get() = if (volume.isEmpty()) "" else "$volume:$relativePath"
 

@@ -31,6 +31,13 @@ object AppIcons {
     val subtitles by lazy { icon("subtitles", "M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zM4 12h4v2H4v-2zm10 6H4v-2h10v2zm6 0h-4v-2h4v2zm0-4H10v-2h10v2z") }
     val audiotrack by lazy { icon("audiotrack", "M12 3v9.28c-.47-.17-.97-.28-1.5-.28C8.01 12 6 14.01 6 16.5S8.01 21 10.5 21c2.31 0 4.2-1.75 4.45-4H15V6h4V3h-7z") }
     val speed by lazy { icon("speed", "M20.38 8.57l-1.23 1.85a8 8 0 0 1-.22 7.58H5.07A8 8 0 0 1 15.58 6.85l1.85-1.23A10 10 0 0 0 3.35 19a2 2 0 0 0 1.72 1h13.85a2 2 0 0 0 1.74-1 10 10 0 0 0-.27-10.44zm-9.79 6.84a2 2 0 0 0 2.83 0l5.66-8.49-8.49 5.66a2 2 0 0 0 0 2.83z") }
+    val playlistAdd by lazy { icon("playlist_add", "M14 10H2v2h12v-2zm0-4H2v2h12V6zm4 8v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zM2 16h8v-2H2v2z") }
+    val playlistPlay by lazy { icon("playlist_play", "M19 9H2v2h17V9zm0-4H2v2h17V5zM2 15h13v-2H2v2zm15-2v6l5-3-5-3z") }
+    val barChart by lazy { icon("bar_chart", "M5 9.2h3V19H5zM10.6 5h2.8v14h-2.8zm5.6 8H19v6h-2.8z") }
+    val arrowUp by lazy { icon("arrow_upward", "M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z") }
+    val arrowDown by lazy { icon("arrow_downward", "M20 12l-1.41-1.41L13 16.17V4h-2v12.17l-5.58-5.59L4 12l8 8 8-8z") }
+    val filter by lazy { icon("filter_list", "M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z") }
+    val timer by lazy { icon("timer", "M15 1H9v2h6V1zm-4 13h2V8h-2v6zm8.03-6.61l1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42C16.07 4.74 14.12 4 12 4c-4.97 0-9 4.03-9 9s4.02 9 9 9 9-4.03 9-9c0-2.12-.74-4.07-1.97-5.61zM12 20c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z") }
     val check by lazy { icon("check", "M9 16.17L4.83 12l-1.42 1.42L9 19 21 7l-1.41-1.41z") }
     val skipPrevious by lazy { icon("skip_previous", "M6 6h2v12H6zm3.5 6l8.5 6V6z") }
     val skipNext by lazy { icon("skip_next", "M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z") }

@@ -68,6 +68,10 @@ interface AppActions {
     fun openFolder(key: String)
     fun openSearch()
     fun openHistory()
+    fun openPlaylist(id: String)
+    fun openStats()
+    // The "Save to playlist" sheet, for `video`.
+    fun saveToPlaylist(video: Video)
 }
 
 val LocalAppActions = staticCompositionLocalOf<AppActions> { error("No AppActions") }

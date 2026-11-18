@@ -186,7 +186,9 @@ Subtitles that are out of step can be fixed with Z / X (0.1s earlier / later, Sh
 view while you move them (**Reset** goes back to the file's own timing). It works for subtitle
 files and the ones built into a video alike, without changing any file: the timing is remembered
 for that video and that subtitle track, and follows a subtitle file renamed or moved with its
-video.
+video. On Android it's **Timing** in the player's Subtitles list (while subtitles are on): a panel
+at the top of the video with the same steps, Reset, and play/pause to stop on a line; a tap beside
+it or Back closes it. It works with either engine (ExoPlayer or mpv) and is remembered the same way.
 
 ## The library
 
@@ -259,6 +261,47 @@ the app's folder before it was renamed, the first time Vessel runs):
 - `settings.ini`: the volume, other settings, and recent searches
 
 Delete `metadata.json` and `thumbnails\` to rebuild the thumbnails.
+
+## On Android
+
+The Android app has the same features, laid out for a phone (the tabs are along the bottom:
+Home, Videos, Library, Playlists, Settings). Where they work differently:
+
+- **The player's settings** (the gear on the video) hold what the desktop's controls bar and
+  More menu do: speed, audio track, subtitles (with **Timing**), **Picture** (Fill the screen,
+  Rotate 90°, aspect ratio), **Save to playlist**, repeat and autoplay. **Save** and **More**
+  are also under the title on the watch page. Dragging the seek bar (or swiping the video
+  sideways in full screen) shows the frame there: the keyframe nearest it, so quick rather than
+  exact. A video only mpv can play shows just the time.
+- **Volume:** the phone's volume keys. Past the phone's maximum, Volume up boosts the sound to
+  200% in 10% steps ("Volume boost 150%"), and Volume down takes the boost off before the
+  phone's own volume. Holding a key steps the boost a few times a second; the boost starts
+  only with a fresh press of Volume up once the phone is at its maximum. The boost lasts until
+  Vessel is closed.
+- **Remembered tracks:** the audio track and subtitle picked for a video (one of its own, a file
+  added to it, or Off) are picked again next time, with either engine.
+- **Subtitles found:** Android doesn't let an app read subtitle files beside videos, so Vessel
+  only looks in folders you add in **Settings > Subtitles > Folders to look in** (with Android's
+  folder picker). A matching file there (the same rules as on the desktop) is offered the first
+  time the video plays; **Turn on** copies it into Vessel's own folder and adds it each time.
+- **Subtitle look** (size, colour, background) is in Settings > Subtitles, as on the desktop, for
+  both engines.
+- **Rename, Move to… and Delete** are in a video's menu (a long press). Android asks you to
+  allow each change in its own dialog. Delete moves the video to the phone's trash, where it
+  stays for 30 days (on Android 10, which has no trash, it's deleted for good, after asking).
+  Move offers the library's folders on the same storage, and Movies. A renamed or moved video
+  keeps its history, subtitles, timing, track choices, playlists and stats; a deleted one's are
+  forgotten, so another file given its name later starts afresh.
+- **Filters and sort:** the Videos tab, folder pages and Search have the filter button (Length,
+  Progress, Type, Resolution) and the sort menu with Release year. Search keeps your last few
+  searches.
+- **Stats:** **Your stats** on the History page, or in Settings. Tap a bar for its time.
+- **Undo:** removing from history, clearing it, marking watched or unwatched, removing a video
+  from a playlist and deleting a playlist each show a note with **Undo** at the bottom.
+
+Its data is in the app's own storage: `history.json`, `playlists.json` and `stats.json` in the
+desktop's formats, `choices.json` (track choices and "Subtitles found" answers),
+`subtitle-timing.json`, and `subtitles.json` with the `subtitles` folder.
 
 ## Updates
 

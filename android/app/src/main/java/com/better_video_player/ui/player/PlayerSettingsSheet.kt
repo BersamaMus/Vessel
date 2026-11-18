@@ -51,12 +51,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.better_video_player.VesselViewModel
+import com.better_video_player.delayText
 import com.better_video_player.ui.AppIcon
 import com.better_video_player.ui.AppIcons
 import com.better_video_player.ui.Palette
 import com.better_video_player.data.OpenSubtitles
 import com.better_video_player.data.SubtitleResult
 import com.better_video_player.engine.TrackType
+import com.better_video_player.engine.Picture
+import com.better_video_player.ui.LocalAppActions
 import kotlinx.coroutines.delay
 import java.text.NumberFormat
 
@@ -65,10 +68,16 @@ private val speeds = listOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
 
 private fun speedText(speed: Float) = if (speed == 1f) "Normal" else "${speed.toString().removeSuffix(".0")}×"
 
+// "Original", or what's changed: "16:9  •  Fill  •  90°".
+private fun pictureText(p: Picture) =
+    if (p.isDefault) "Original"
+    else listOfNotNull(p.aspect.ifEmpty { null }, "Fill".takeIf { p.fill }, if (p.rotation != 0) "${p.rotation}°" else null)
+        .joinToString("  •  ")
+
 // The player's settings, from the gear on the video: speed, audio track, subtitles, repeat
 // and autoplay. Each list opens in place of the main one, as in YouTube's sheet. The
-// subtitles list also adds subtitles from outside the video: searched for online
-// (OpenSubtitles), or picked from the phone's files.
+// subtitles list also fixes their timing (SubtitleTimingPanel), and adds subtitles from
+// outside the video: searched for online (OpenSubtitles), or picked from the phone's files.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerSettingsSheet(vm: VesselViewModel, watch: WatchState, ui: PlayerUiState, onDismiss: () -> Unit) {
@@ -79,6 +88,9 @@ fun PlayerSettingsSheet(vm: VesselViewModel, watch: WatchState, ui: PlayerUiStat
     val subtitles = ui.subtitleTracks
     val subtitleOn = subtitles.firstOrNull { it.selected }
     val video by vm.current.collectAsStateWithLifecycle()
+    val timing by vm.subtitleTiming.collectAsStateWithLifecycle()
+    val picture by vm.picture.collectAsStateWithLifecycle()
+    val actions = LocalAppActions.current
 
     // Online search: what to look for, in which language.
     var query by remember { mutableStateOf(video?.let(vm::subtitleQuery).orEmpty()) }
@@ -105,12 +117,41 @@ fun PlayerSettingsSheet(vm: VesselViewModel, watch: WatchState, ui: PlayerUiStat
                              if (subtitles.isEmpty()) "None in this video" else subtitleOn?.label ?: "Off") {
                         page = "subtitles"
                     }
+                    SheetRow(AppIcons.aspect, "Picture", pictureText(picture)) { page = "picture" }
+                    video?.let { v ->
+                        SheetRow(AppIcons.playlistAdd, "Save to playlist", "") {
+                            onDismiss()
+                            actions.saveToPlaylist(v)
+                        }
+                    }
                     SheetSwitch(AppIcons.repeat, "Repeat this video", ui.repeat) {
                         vm.setRepeat(!ui.repeat)
                         watch.flashText = if (ui.repeat) "Repeat off" else "Repeat on"
                     }
                     SheetSwitch(AppIcons.play, "Autoplay", autoplay, "Play the next video in the folder") {
                         vm.setAutoplay(!autoplay)
+                    }
+                }
+                "picture" -> {
+                    // As the desktop's More menu: the shape, filling the screen, turning. Each
+                    // video starts without them.
+                    SheetTitle("Picture") { page = "main" }
+                    SheetSwitch(AppIcons.fill, "Fill the screen", picture.fill, "Crop the edges so there are no black bars") {
+                        vm.setPicture(picture.copy(fill = !picture.fill))
+                        watch.flashText = if (picture.fill) "Whole picture" else "Filling the screen"
+                    }
+                    SheetRow(AppIcons.rotate, if (picture.rotation == 0) "Rotate 90°" else "Rotate 90° (now ${picture.rotation}°)", "") {
+                        val turned = (picture.rotation + 90) % 360
+                        vm.setPicture(picture.copy(rotation = turned))
+                        watch.flashText = if (turned == 0) "Not rotated" else "Rotated $turned°"
+                    }
+                    Text("Aspect ratio", Modifier.padding(start = 20.dp, top = 12.dp, bottom = 4.dp), color = Palette.textTertiary, fontSize = 13.sp)
+                    for ((value, label) in listOf("" to "Original", "16:9" to "16:9", "4:3" to "4:3", "21:9" to "21:9")) {
+                        SheetChoice(label, picture.aspect == value) {
+                            vm.setPicture(picture.copy(aspect = value))
+                            watch.flashText = if (value.isEmpty()) "Original aspect ratio" else "Aspect ratio $value"
+                            onDismiss()
+                        }
                     }
                 }
                 "speed" -> {
@@ -144,6 +185,16 @@ fun PlayerSettingsSheet(vm: VesselViewModel, watch: WatchState, ui: PlayerUiStat
                         SheetChoice(choice.label, choice.selected) {
                             vm.selectTrack(TrackType.Subtitle, choice)
                             watch.flashText = "Subtitles: ${choice.label}"
+                            onDismiss()
+                        }
+                    }
+                    // Opens a panel on the video rather than a page here, so the subtitles can
+                    // be seen moving into step.
+                    if (subtitleOn != null) {
+                        SheetRow(AppIcons.timer, "Timing", delayText(timing.delayMs)) {
+                            watch.timingOpen = true
+                            // The controls' shade would hide how the subtitles line up.
+                            watch.controlsShown = false
                             onDismiss()
                         }
                     }

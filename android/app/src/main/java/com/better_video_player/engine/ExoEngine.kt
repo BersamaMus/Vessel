@@ -4,6 +4,8 @@ package com.better_video_player.engine
 
 import android.content.Context
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.Format
@@ -13,20 +15,47 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
+import androidx.media3.common.text.Cue
+import androidx.media3.common.text.CueGroup
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.ForwardingRenderer
+import androidx.media3.exoplayer.Renderer
+import androidx.media3.exoplayer.RendererConfiguration
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.SampleStream
+import androidx.media3.exoplayer.text.TextOutput
 import com.better_video_player.data.codecName
 import java.util.Locale
+import java.util.TreeMap
+import kotlin.math.roundToInt
 
 // Media3's ExoPlayer: hardware decoding through Android's own codecs. The default engine.
-class ExoEngine(context: Context) : VideoEngine {
+class ExoEngine(private val context: Context) : VideoEngine {
     override val name = "ExoPlayer"
+
+    // The subtitle delay in µs, and the video's length in µs (0 until known), read by
+    // DelayedTextRenderer on ExoPlayer's own thread.
+    @Volatile private var subtitleDelayUs = 0L
+    @Volatile private var durationUs = 0L
 
     val player: ExoPlayer = ExoPlayer.Builder(
         context,
-        DefaultRenderersFactory(context)
+        object : DefaultRenderersFactory(context) {
+            // ExoPlayer has no setting for subtitle timing: its subtitle renderer is handed a
+            // clock that runs behind (or ahead of) the video's instead.
+            override fun buildTextRenderers(context: Context, output: TextOutput, outputLooper: Looper,
+                                            extensionRendererMode: Int, out: ArrayList<Renderer>) {
+                val renderers = ArrayList<Renderer>()
+                // (Media3 makes one subtitle renderer, so one memory is enough.)
+                val memory = CueMemory(output)
+                super.buildTextRenderers(context, memory, outputLooper, extensionRendererMode, renderers)
+                val handler = Handler(outputLooper)
+                renderers.mapTo(out) { DelayedTextRenderer(it, memory, handler, { subtitleDelayUs }, { durationUs }) }
+            }
+        }
             // If a decoder fails to start (it happens with some hardware ones), the next one is tried.
             .setEnableDecoderFallback(true)
             // The emulator's "goldfish" decoders fail mid-stream; its software ones work. (Emulator only.)
@@ -58,6 +87,7 @@ class ExoEngine(context: Context) : VideoEngine {
     init {
         player.addListener(object : Player.Listener {
             override fun onEvents(player: Player, events: Player.Events) {
+                durationUs = player.duration.let { if (it == C.TIME_UNSET) 0 else it * 1000 }
                 listeners.each { it.onChanged() }
             }
 
@@ -128,8 +158,24 @@ class ExoEngine(context: Context) : VideoEngine {
 
     // A phone's upright video is stored sideways, tagged to turn.
     private val turned get() = (player.videoFormat?.rotationDegrees ?: 0) % 180 != 0
-    override val videoWidth get() = player.videoFormat?.let { if (turned) it.height else it.width } ?: 0
-    override val videoHeight get() = player.videoFormat?.let { if (turned) it.width else it.height } ?: 0
+    override val videoWidth get() = shownSize?.let { (w, h) -> if (turned) h else w } ?: 0
+    override val videoHeight get() = shownSize?.let { (w, h) -> if (turned) w else h } ?: 0
+
+    // The picture's size as shown, before turning: some videos are stored with pixels that
+    // aren't square (a DVD's 720 × 480 is shown at 16:9, as 853 × 480), and the picture's
+    // shape must follow how it's shown, not how it's stored. Made wider or taller as mpv's
+    // dwidth / dheight are, so both engines report the same.
+    private val shownSize: Pair<Int, Int>?
+        get() {
+            val f = player.videoFormat ?: return null
+            if (f.width <= 0 || f.height <= 0) return null
+            val pixel = f.pixelWidthHeightRatio
+            return when {
+                pixel <= 0f || pixel == 1f -> f.width to f.height
+                pixel > 1f -> (f.width * pixel).roundToInt() to f.height
+                else -> f.width to (f.height / pixel).roundToInt()
+            }
+        }
     override val videoCodec get() = codecName(player.videoFormat?.sampleMimeType)
     override val frameRate get() = player.videoFormat?.frameRate?.takeIf { it > 0 } ?: 0f
 
@@ -145,10 +191,13 @@ class ExoEngine(context: Context) : VideoEngine {
                     else -> return@forEachIndexed
                 }
                 for (i in 0 until group.length) {
-                    if (!group.isTrackSupported(i)) continue
-                    val number = if (type == TrackType.Audio) ++audio else ++text
                     val format = group.getTrackFormat(i)
-                    result += TrackInfo(type, "$g:$i", trackLabel(format, number), group.isTrackSelected(i), externalPath(format))
+                    val file = externalPath(format)
+                    // Counted even when it can't be played here (and so isn't listed), so a
+                    // track's place is the same as in mpv, which lists them all.
+                    val place = if (file != null) 0 else if (type == TrackType.Audio) ++audio else ++text
+                    if (!group.isTrackSupported(i)) continue
+                    result += TrackInfo(type, "$g:$i", trackLabel(format, place.takeIf { it > 0 } ?: 1), group.isTrackSelected(i), file, place)
                 }
             }
             return result
@@ -165,6 +214,9 @@ class ExoEngine(context: Context) : VideoEngine {
         pendingSubtitle = selected?.file?.absolutePath
         pendingAudio = null
         reloadingAtEnd = false
+        main.removeCallbacks(resync)
+        subtitleDelayMs = 0
+        subtitleDelayUs = 0
         player.repeatMode = Player.REPEAT_MODE_OFF
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .clearOverrides()
@@ -296,7 +348,213 @@ class ExoEngine(context: Context) : VideoEngine {
         player.trackSelectionParameters = builder.build()
     }
 
-    override fun release() = player.release()
+    override var subtitleDelayMs = 0L
+        private set
+
+    // The volume boost: Android's loudness enhancer on the player's sound, made when first
+    // needed. The audio session is made here, not left to ExoPlayer (which makes its own
+    // later, on another thread), so the enhancer can be attached to it right away.
+    private val audioSession = context.getSystemService(android.media.AudioManager::class.java).generateAudioSessionId()
+        .also { player.setAudioSessionId(it) }
+    private var enhancer: android.media.audiofx.LoudnessEnhancer? = null
+
+    override fun setVolumeBoost(percent: Int) {
+        val boost = percent.coerceIn(100, 200)
+        try {
+            if (boost == 100) {
+                enhancer?.enabled = false
+                return
+            }
+            val e = enhancer ?: android.media.audiofx.LoudnessEnhancer(audioSession).also { enhancer = it }
+            // As a gain in millibels: 200% is about +6 dB.
+            e.setTargetGain((2000 * kotlin.math.log10(boost / 100.0)).toInt())
+            e.enabled = true
+        } catch (e: RuntimeException) {
+            // Some phones don't offer the effect: the sound just isn't boosted.
+            android.util.Log.w("ExoEngine", "No loudness enhancer", e)
+        }
+    }
+
+    private val main = Handler(Looper.getMainLooper())
+
+    // After the subtitles were moved later, the renderer has to show cues it has already let
+    // go of; only a seek makes it read them again. Seeking to exactly where the video is does
+    // nothing (ExoPlayer skips it), hence the millisecond back.
+    private val resync = Runnable {
+        val state = player.playbackState
+        if (state == Player.STATE_READY || state == Player.STATE_BUFFERING)
+            player.seekTo((player.currentPosition - 1).coerceAtLeast(0))
+    }
+
+    override fun setSubtitleDelay(ms: Long) {
+        if (ms == subtitleDelayMs) return
+        val later = ms > subtitleDelayMs
+        subtitleDelayMs = ms
+        subtitleDelayUs = ms * 1000
+        // Earlier, while playing, the renderer just catches up; later, or while paused (when
+        // ExoPlayer rarely asks it for anything), it needs the seek. A burst of taps gets one,
+        // once they stop, since it can make the picture hitch.
+        if (later || !player.isPlaying) {
+            main.removeCallbacks(resync)
+            main.postDelayed(resync, 400)
+        }
+    }
+
+    override fun release() {
+        main.removeCallbacks(resync)
+        enhancer?.release()
+        player.release()
+    }
+}
+
+// Shows a renderer's subtitles `delayUs()` later (earlier if negative) than their own timing,
+// by telling it the video is that far behind. Cues are read ahead as the video loads, so
+// moving them earlier works while playing.
+//
+// Later is harder after a seek: ExoPlayer then reads the subtitles from about where the video
+// now is, so the ones from `delay` before it, which should be showing, aren't there. The cues
+// it showed while playing are remembered (CueMemory), and after a seek those are shown until
+// the renderer has its own again. (Seeking far ahead, to a part not played yet, still leaves
+// a gap of up to `delay`; ExoPlayer has thrown those cues away.)
+private class DelayedTextRenderer(
+    renderer: Renderer,
+    private val memory: CueMemory,
+    // On the thread the subtitles are shown from (the main one), where CueMemory lives.
+    private val handler: Handler,
+    private val delayUs: () -> Long,
+    private val durationUs: () -> Long,
+) : ForwardingRenderer(renderer) {
+    // Added to a time in the video to make the renderer's own time (see Renderer.enable()).
+    private var offsetUs = 0L
+    // The renderer's time last rendered: the video's, and the one handed on (delay applied).
+    private var realUs = C.TIME_UNSET
+    private var shiftedUs = C.TIME_UNSET
+
+    override fun enable(configuration: RendererConfiguration, formats: Array<Format>, stream: SampleStream,
+                        positionUs: Long, joining: Boolean, mayRenderStartOfStream: Boolean,
+                        startPositionUs: Long, offsetUs: Long, mediaPeriodId: MediaSource.MediaPeriodId) {
+        this.offsetUs = offsetUs
+        realUs = C.TIME_UNSET
+        shiftedUs = C.TIME_UNSET
+        super.enable(configuration, formats, stream, positionUs, joining, mayRenderStartOfStream,
+                     startPositionUs, offsetUs, mediaPeriodId)
+    }
+
+    override fun replaceStream(formats: Array<Format>, stream: SampleStream, startPositionUs: Long,
+                               offsetUs: Long, mediaPeriodId: MediaSource.MediaPeriodId) {
+        this.offsetUs = offsetUs
+        super.replaceStream(formats, stream, startPositionUs, offsetUs, mediaPeriodId)
+    }
+
+    // Another track, or another video: what was remembered is no use. (Posted before the
+    // renderer's own clearing, so it reaches the memory first.)
+    override fun disable() {
+        handler.post { memory.clear() }
+        super.disable()
+    }
+
+    override fun resetPosition(positionUs: Long, sampleStreamIsResetToKeyFrame: Boolean) {
+        val until = if (shiftedUs == C.TIME_UNSET) C.TIME_UNSET else shiftedUs - offsetUs
+        handler.post { memory.seeked(until) }
+        realUs = positionUs
+        super.resetPosition(positionUs, sampleStreamIsResetToKeyFrame)
+    }
+
+    override fun render(positionUs: Long, elapsedRealtimeUs: Long) {
+        val delay = delayUs()
+        realUs = positionUs
+        shiftedUs = positionUs - delay
+        super.render(shiftedUs, elapsedRealtimeUs)
+        if (delay > 0 && memory.restoring) {
+            val at = shiftedUs - offsetUs
+            handler.post { memory.show(at) }
+        }
+    }
+
+    override fun getDurationToProgressUs(positionUs: Long, elapsedRealtimeUs: Long): Long =
+        super.getDurationToProgressUs(positionUs - delayUs(), elapsedRealtimeUs)
+
+    // ExoPlayer ends the video only once every renderer has. Subtitles moved later would hold
+    // it on its last picture until they were through: once the video is at its end, they're done.
+    override fun isEnded(): Boolean {
+        if (super.isEnded()) return true
+        val duration = durationUs()
+        return delayUs() > 0 && duration > 0 && realUs != C.TIME_UNSET && realUs - offsetUs >= duration
+    }
+}
+
+// The subtitles a renderer showed, by when in the video (the file's own timing), to show again
+// after a seek (see DelayedTextRenderer). It stands between the renderer and the player, and
+// is used on the thread the renderer's subtitles arrive on (the main one).
+private class CueMemory(private val output: TextOutput) : TextOutput {
+    private class Shown(val untilUs: Long, val cues: List<Cue>)
+
+    // By the time they came on.
+    private val shown = TreeMap<Long, Shown>()
+    // What the renderer has on screen now, and since when.
+    private var sinceUs = C.TIME_UNSET
+    private var current: List<Cue> = emptyList()
+    // After a seek the renderer first clears the screen; from then until it shows something
+    // of its own, remembered cues are shown (`restoring`, read on ExoPlayer's thread).
+    private var awaitingClear = false
+    @Volatile var restoring = false
+        private set
+    private var restored: List<Cue>? = null
+
+    fun clear() {
+        shown.clear()
+        sinceUs = C.TIME_UNSET
+        current = emptyList()
+        awaitingClear = false
+        restoring = false
+        restored = null
+    }
+
+    // A seek: what was on screen lasted at least until `untilUs` (the file's timing).
+    fun seeked(untilUs: Long) {
+        keepCurrent(untilUs)
+        sinceUs = C.TIME_UNSET
+        current = emptyList()
+        awaitingClear = true
+        restoring = false
+        restored = null
+    }
+
+    // While restoring: shows what was on screen at `atUs` (the file's timing), if anything.
+    fun show(atUs: Long) {
+        if (!restoring) return
+        val cues = shown.floorEntry(atUs)?.value?.takeIf { it.untilUs > atUs }?.cues ?: emptyList()
+        if (cues === restored) return
+        restored = cues
+        send(CueGroup(cues, atUs))
+    }
+
+    override fun onCues(cueGroup: CueGroup) {
+        if (awaitingClear) {
+            awaitingClear = false
+            restoring = true
+            send(cueGroup)
+            return
+        }
+        restoring = false
+        restored = null
+        keepCurrent(cueGroup.presentationTimeUs)
+        sinceUs = cueGroup.presentationTimeUs
+        current = cueGroup.cues
+        send(cueGroup)
+    }
+
+    private fun keepCurrent(untilUs: Long) {
+        if (sinceUs != C.TIME_UNSET && current.isNotEmpty() && untilUs != C.TIME_UNSET && untilUs > sinceUs)
+            shown[sinceUs] = Shown(untilUs, current)
+    }
+
+    // On to the player, both ways the renderer itself hands them over.
+    @Suppress("DEPRECATION")
+    private fun send(group: CueGroup) {
+        output.onCues(group.cues)
+        output.onCues(group)
+    }
 }
 
 private const val EXTERNAL_ID = "vessel-subtitle|"

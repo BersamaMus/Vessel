@@ -42,7 +42,15 @@ import com.better_video_player.ui.VideoCard
 
 // The sort menu of the Videos tab and folder pages, as on the desktop.
 enum class VideoSort(val label: String) {
-    Name("Name"), Added("Recently added"), Watched("Recently watched"), Longest("Longest first"), Largest("Largest first")
+    // Search's own order: the best matches first (see SearchScreen).
+    Relevance("Relevance"),
+    Name("Name"), Added("Recently added"), Watched("Recently watched"), Year("Release year"), Longest("Longest first"),
+    Largest("Largest first");
+
+    companion object {
+        // What the pages offer (all but Relevance).
+        val pages = entries.filter { it != Relevance }
+    }
 }
 
 @Composable
@@ -50,7 +58,10 @@ fun sortVideos(videos: List<Video>, sort: VideoSort): List<Video> {
     val seen = LocalSeen.current
     return remember(videos, sort, if (sort == VideoSort.Watched) seen else null) {
         when (sort) {
+            VideoSort.Relevance -> videos
             VideoSort.Name -> videos.sortedWith(compareBy(NaturalOrder) { it.title })
+            // Newest first; videos with no year last, by name.
+            VideoSort.Year -> videos.sortedWith(compareByDescending<Video> { it.year }.thenBy(NaturalOrder) { it.title })
             VideoSort.Added -> videos.sortedByDescending { it.addedMs }
             VideoSort.Watched -> videos.sortedByDescending { seen[it.key]?.watchedAt ?: 0 }
             VideoSort.Longest -> videos.sortedByDescending { it.durationMs }
@@ -89,16 +100,21 @@ fun VideosScreen(vm: VesselViewModel, bottomPadding: Dp) {
     val index by vm.index.collectAsStateWithLifecycle()
     val loaded by vm.library.loaded.collectAsStateWithLifecycle()
     var sort by rememberSaveable { mutableStateOf(VideoSort.Added) }
+    var filter by rememberSaveable(stateSaver = VideoFilter.saver) { mutableStateOf(VideoFilter()) }
     val grid = rememberLazyGridState()
-    val videos = sortVideos(index.videos, sort)
+    val videos = sortVideos(filterVideos(index.videos, filter), sort)
 
     Column(Modifier.fillMaxSize()) {
         TitleBar("Videos", if (loaded) countText(videos.size, "video", "videos") else "", grid.canScrollBackward) {
             IconBtn(AppIcons.search, onClick = actions::openSearch, contentDescription = "Search")
-            SortButton(VideoSort.entries.map { it to it.label }, sort) { sort = it }
+            FilterButton(filter, index.videos) { filter = it }
+            SortButton(VideoSort.pages.map { it to it.label }, sort) { sort = it }
         }
-        if (loaded && videos.isEmpty())
+        if (loaded && index.videos.isEmpty())
             EmptyNote("No videos on this phone yet.", Modifier.padding(top = 16.dp), icon = AppIcons.movie)
+        else if (loaded && videos.isEmpty())
+            EmptyNote("No videos match these filters.", Modifier.padding(top = 16.dp), icon = AppIcons.filter,
+                      actionText = "Clear filters", onAction = { filter = VideoFilter() })
         VideoGrid(videos, grid, bottomPadding, subtitle = { it.folderName })
     }
 }
@@ -148,13 +164,15 @@ fun FolderScreen(vm: VesselViewModel, key: String, bottomPadding: Dp, onBack: ()
     val index by vm.index.collectAsStateWithLifecycle()
     val folder = index.byFolder[key]
     var sort by rememberSaveable { mutableStateOf(VideoSort.Name) }
+    var filter by rememberSaveable(stateSaver = VideoFilter.saver) { mutableStateOf(VideoFilter()) }
     val grid = rememberLazyGridState()
-    val videos = sortVideos(folder?.videos ?: emptyList(), sort)
+    val videos = sortVideos(filterVideos(folder?.videos ?: emptyList(), filter), sort)
 
     Column(Modifier.fillMaxSize()) {
-        TitleBar(folder?.name ?: "Folder", folder?.let { countText(it.videos.size, "video", "videos") } ?: "",
+        TitleBar(folder?.name ?: "Folder", folder?.let { countText(videos.size, "video", "videos") } ?: "",
                  grid.canScrollBackward, onBack = onBack) {
-            SortButton(VideoSort.entries.map { it to it.label }, sort) { sort = it }
+            FilterButton(filter, folder?.videos ?: emptyList()) { filter = it }
+            SortButton(VideoSort.pages.map { it to it.label }, sort) { sort = it }
         }
         if (folder == null) {
             EmptyNote("This folder has no videos any more.", Modifier.padding(top = 16.dp), icon = AppIcons.folder)

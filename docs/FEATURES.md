@@ -151,6 +151,7 @@ Almost all of it is [WatchView.qml](../qml/WatchView.qml), sectioned with `// --
 | Subtitle menu, adding a file, C to toggle | `subtitleMenu`, `addSubtitleFiles()`, `chooseSubtitle()`, `toggleSubtitles()` |
 | Search online (OpenSubtitles): by title and file hash, download next to the video, daily-limit fallback to the website (`resetAt`, saved in Main's `subtitleLimitReset`), "Downloaded" mark on ones fetched before | [SubtitleSearch.cpp](../src/SubtitleSearch.cpp) (`search()`, `movieHash()`, `download()`, `saveDownload()`); dialog in [SubtitleSearchDialog.qml](../qml/SubtitleSearchDialog.qml), `onlineSubtitles` in WatchView; API key from `opensubtitles.key` in CMakeLists.txt; language in Main's `subtitleLanguage` setting; what was downloaded per video in `VideoLibrary::downloadedSubtitles()` / `noteDownloadedSubtitle()` (the history entry's `downloads`, followed through `relocate()`); unused ones in the data folder deleted by `VideoLibrary::removeUnusedSubtitles()` at start |
 | Subtitle timing: Z / X, the Timing… panel, remembered per video and track | `shiftSubtitles()`, `resetTiming()`, `timingTrack`, `timingPanel` in WatchView; the `MpvItem::subtitleDelay` property; stored in `VideoLibrary::subtitleDelay()` / `setSubtitleDelay()` (the history entry's `timing`, followed through `relocate()`) |
+| Android: subtitle timing (Subtitles > Timing, a panel on the video), remembered per video and track | `ui/player/SubtitleTimingPanel.kt`, `WatchState.timingOpen`; `VesselViewModel.subtitleTiming`, `followSubtitleTrack()`, `shiftSubtitles()`; `VideoEngine.setSubtitleDelay()`: mpv's `sub-delay`, and in ExoPlayer `DelayedTextRenderer` (a `ForwardingRenderer` that hands the text renderer a shifted position; a 1 ms seek makes it re-read cues after a later shift or while paused; `CueMemory` shows the cues already seen again after a seek, which ExoPlayer no longer has when they're later); stored in `data/SubtitleTiming.kt` (`subtitle-timing.json`) |
 | Subtitle look (size, colour, background) | Settings in Main.qml → `WatchView.applySubtitleStyle()`; UI in [SettingsPage.qml](../qml/SettingsPage.qml) |
 | Audio track choice (remembered per video), A to cycle | `chooseAudio()`, `cycleAudio()`; `VideoLibrary::audioChoice()` / `setAudioChoice()` |
 
@@ -217,6 +218,29 @@ aliases on the root of [Main.qml](../qml/Main.qml).
 | Android: the same check, setting and a bar above the tabs | `data/UpdateCheck.kt`, `VesselViewModel.newerVersion`, `UpdateNotice` in `ui/VesselApp.kt`, `AppSettings.checkForUpdates` |
 
 Release tags must stay `vX.Y.Z` for it (and Jeti) to read them. Blimp and Glide check the same way.
+
+### Android
+Paths are under `android/app/src/main/java/com/better_video_player/`. The view model
+(`VesselViewModel.kt`) ties each feature together; the stores in `data/` each keep one JSON file
+in the app's files folder, written aside and swapped in (`data/JsonFile.kt`).
+
+| What | Where |
+|---|---|
+| Tabs (Home, Videos, Library, Playlists, Settings), pages on top of them, the video menu, the Undo note | `ui/VesselApp.kt` (`Tab`, `Route`, `VideoMenu`, `ToastHost`); `VesselViewModel.toast()` |
+| Engines: ExoPlayer and mpv behind one interface | `engine/VideoEngine.kt`, `engine/ExoEngine.kt`, `engine/MpvEngine.kt` |
+| The picture: aspect, fill, rotate (`Picture`) | mpv: `MpvEngine.setPicture()`; ExoPlayer: `pictureFrame()` in `ui/player/VideoSurface.kt` (a TextureView `PlayerView`, `res/layout/player_texture_view.xml`, while turned or filled); the Picture page in `ui/player/PlayerSettingsSheet.kt`; `VesselViewModel.picture` |
+| Subtitle look | `AppSettings.subtitleStyle`; mpv: `MpvEngine.setSubtitleStyle()`; ExoPlayer: `ExoSubtitles()` in VideoSurface.kt (its own SubtitleView, so subtitles stay upright); Settings > Subtitles in `ui/screens/OtherScreens.kt` (`SubtitleSettings`) |
+| Remembered audio and subtitle tracks | `data/TrackChoices.kt` (`choices.json`); `selectTrack()`, `applyTrackChoices()`, `trackKeyOf()` in the view model; subtitle files added to a video: `data/SavedSubtitles.kt` |
+| "Subtitles found" from folders the user added | `data/SubtitleFinder.kt` (the desktop's matching rules over the Storage Access Framework); `lookForSubtitleFiles()`, `answerFoundSubtitles()`; `FoundSubtitlesPrompt` in WatchLayer.kt; `AppSettings.subtitleFolders` |
+| Seek bar preview frames | `ui/player/SeekPreview.kt` (MediaMetadataRetriever, nearest keyframe); shown from `PlayerControls` and `SwipeSeekPill` in WatchLayer.kt |
+| Volume boost (volume keys past the maximum) | `MainActivity.dispatchKeyEvent()` → `VesselViewModel.boostVolume()`; ExoPlayer: a LoudnessEnhancer on its audio session; mpv: `volume` up to `volume-max=200` |
+| Playlists | `data/Playlists.kt` (`playlists.json`, the desktop's format); `ui/screens/PlaylistScreens.kt` (tab, playlist page, Save to playlist sheet, rename/delete); `playAll(..., start)` |
+| Filters and Release year sort | `ui/screens/Filters.kt` (`VideoFilter`, `lengthOf()`, `progressOf()`, `resolutionOf()`); `VideoSort` in `ui/screens/LibraryScreens.kt`; `Video.year` from `yearIn()` in `data/Text.kt` or MediaStore's YEAR |
+| Search: recent searches, sort and filters | `SearchScreen` in OtherScreens.kt; `AppSettings.recentSearches` |
+| Home's History shelf | `ui/screens/HomeScreen.kt` |
+| Watch stats | `data/WatchStats.kt` (`stats.json`, the desktop's format; `summary()`); counted in `countWatchTime()` / `saveProgress()`; `ui/screens/StatsScreen.kt` |
+| Rename, Move, Delete (with Android's consent dialogs) | `data/VideoFiles.kt` (MediaStore; `FileOutcome`); `ui/FileActions.kt` (`rememberFileRunner()`, the dialogs); `renameVideo()`, `moveVideo()`, `deleteVideo()`, `relocate()` in the view model |
+| Subtitle timing | see Subtitles and audio tracks above |
 
 ### Look and shared components
 | What | Where |

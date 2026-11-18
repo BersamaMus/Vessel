@@ -5,6 +5,12 @@ import androidx.core.content.edit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
+// How subtitles look (Settings > Subtitles); see AppSettings.subtitleStyle.
+data class SubtitleStyle(val size: String = "medium", val color: String = "white", val background: String = "outline") {
+    val scale: Float get() = when (size) { "small" -> 0.8f; "large" -> 1.25f; "xlarge" -> 1.5f; else -> 1f }
+    val yellow: Boolean get() = color == "yellow"
+}
+
 // The player's settings, kept in SharedPreferences.
 class AppSettings(context: Context) {
     private val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
@@ -44,6 +50,51 @@ class AppSettings(context: Context) {
     // 0 if they haven't. Kept so a restart doesn't spend a request finding it again.
     private val _subtitleLimitReset = MutableStateFlow(prefs.getLong("subtitleLimitReset", 0L))
     val subtitleLimitReset: StateFlow<Long> = _subtitleLimitReset
+
+    // How subtitles look, as on the desktop: size "small" / "medium" / "large" / "xlarge",
+    // colour "white" / "yellow", background "outline" / "box" / "none".
+    private val _subtitleStyle = MutableStateFlow(SubtitleStyle(
+        prefs.getString("subtitleSize", "medium")!!, prefs.getString("subtitleColor", "white")!!,
+        prefs.getString("subtitleBackground", "outline")!!))
+    val subtitleStyle: StateFlow<SubtitleStyle> = _subtitleStyle
+
+    // The last few searches, newest first.
+    private val _recentSearches = MutableStateFlow(
+        prefs.getString("recentSearches", "")!!.split('\n').filter { it.isNotBlank() })
+    val recentSearches: StateFlow<List<String>> = _recentSearches
+
+    // Folders the user let Vessel read (Storage Access Framework tree URIs), where it looks
+    // for subtitle files next to videos: Android's video permission doesn't cover them.
+    private val _subtitleFolders = MutableStateFlow(
+        prefs.getString("subtitleFolders", "")!!.split('\n').filter { it.isNotBlank() })
+    val subtitleFolders: StateFlow<List<String>> = _subtitleFolders
+
+    fun setSubtitleStyle(style: SubtitleStyle) {
+        _subtitleStyle.value = style
+        prefs.edit {
+            putString("subtitleSize", style.size)
+            putString("subtitleColor", style.color)
+            putString("subtitleBackground", style.background)
+        }
+    }
+
+    fun addRecentSearch(text: String) {
+        val t = text.trim()
+        if (t.isEmpty()) return
+        setRecentSearches((listOf(t) + _recentSearches.value.filterNot { it.equals(t, ignoreCase = true) }).take(8))
+    }
+
+    fun removeRecentSearch(text: String) = setRecentSearches(_recentSearches.value - text)
+
+    private fun setRecentSearches(list: List<String>) {
+        _recentSearches.value = list
+        prefs.edit { putString("recentSearches", list.joinToString("\n")) }
+    }
+
+    fun setSubtitleFolders(list: List<String>) {
+        _subtitleFolders.value = list
+        prefs.edit { putString("subtitleFolders", list.joinToString("\n")) }
+    }
 
     fun setSubtitleLanguage(code: String) {
         _subtitleLanguage.value = code
@@ -86,6 +137,14 @@ class AppSettings(context: Context) {
     }
 
     fun usesMpv(key: String) = key in mpvVideos
+
+    // The video was renamed or moved: it still plays with mpv if it did.
+    fun relocateMpv(from: String, to: String) {
+        if (from in mpvVideos) {
+            setUsesMpv(from, false)
+            setUsesMpv(to, true)
+        }
+    }
 
     fun setUsesMpv(key: String, on: Boolean) {
         if (if (on) mpvVideos.add(key) else mpvVideos.remove(key))

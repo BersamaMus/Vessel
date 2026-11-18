@@ -73,6 +73,13 @@ import com.better_video_player.ui.screens.LibraryScreen
 import com.better_video_player.ui.screens.SearchScreen
 import com.better_video_player.ui.screens.SettingsScreen
 import com.better_video_player.ui.screens.VideosScreen
+import com.better_video_player.ui.screens.PlaylistScreen
+import com.better_video_player.ui.screens.PlaylistsScreen
+import com.better_video_player.ui.screens.SaveToPlaylistSheet
+import com.better_video_player.ui.screens.StatsScreen
+import com.better_video_player.Toast
+import androidx.compose.foundation.layout.statusBarsPadding
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -81,6 +88,7 @@ enum class Tab(val label: String, val icon: ImageVector) {
     Home("Home", AppIcons.home),
     Videos("Videos", AppIcons.movie),
     Library("Library", AppIcons.library),
+    Playlists("Playlists", AppIcons.playlistPlay),
     Settings("Settings", AppIcons.settings),
 }
 
@@ -89,6 +97,8 @@ sealed interface Route {
     data class Folder(val key: String) : Route
     data object Search : Route
     data object History : Route
+    data class Playlist(val id: String) : Route
+    data object Stats : Route
 }
 
 private val MiniPlayerHeight = 64.dp
@@ -104,6 +114,10 @@ fun VesselApp(vm: VesselViewModel) {
     val seen by vm.history.entries.collectAsStateWithLifecycle()
     val current by vm.current.collectAsStateWithLifecycle()
     var menuVideo by remember { mutableStateOf<Video?>(null) }
+    var saveVideo by remember { mutableStateOf<Video?>(null) }
+    // Kept here, not in the menu: Android's "allow this change?" answer comes back after the
+    // menu has closed.
+    val fileRunner = rememberFileRunner(vm)
     var navHeightPx by remember { mutableStateOf(0) }
     val density = LocalDensity.current
     // Room under each page for the mini player, so it doesn't cover the end of a list.
@@ -125,6 +139,11 @@ fun VesselApp(vm: VesselViewModel) {
             override fun openFolder(key: String) = push(Route.Folder(key))
             override fun openSearch() = push(Route.Search)
             override fun openHistory() = push(Route.History)
+            override fun openPlaylist(id: String) = push(Route.Playlist(id))
+            override fun openStats() = push(Route.Stats)
+            override fun saveToPlaylist(video: Video) {
+                saveVideo = video
+            }
         }
     }
 
@@ -152,11 +171,14 @@ fun VesselApp(vm: VesselViewModel) {
                                     Tab.Home -> HomeScreen(vm, bottomPadding, onSeeAllFolders = { tab = Tab.Library })
                                     Tab.Videos -> VideosScreen(vm, bottomPadding)
                                     Tab.Library -> LibraryScreen(vm, bottomPadding)
+                                    Tab.Playlists -> PlaylistsScreen(vm, bottomPadding)
                                     Tab.Settings -> SettingsScreen(vm, bottomPadding, onOpenHistory = { push(Route.History) })
                                 }
                                 is Route.Folder -> FolderScreen(vm, route.key, bottomPadding, back)
                                 Route.Search -> SearchScreen(vm, bottomPadding, back)
                                 Route.History -> HistoryScreen(vm, bottomPadding, back)
+                                is Route.Playlist -> PlaylistScreen(vm, route.id, bottomPadding, back)
+                                Route.Stats -> StatsScreen(vm, bottomPadding, back)
                             }
                         }
                         UpdateNotice(vm, Modifier.align(Alignment.BottomCenter).padding(bottom = bottomPadding))
@@ -192,11 +214,46 @@ fun VesselApp(vm: VesselViewModel) {
         }
 
         menuVideo?.let { video ->
-            VideoMenu(vm, video, onDismiss = { menuVideo = null }, onOpenFolder = {
+            VideoMenu(vm, video, fileRunner, onDismiss = { menuVideo = null }, onOpenFolder = {
                 menuVideo = null
                 scope.launch { if (vm.current.value != null) watch.minimize() }
                 actions.openFolder(video.folder)
             })
+        }
+        saveVideo?.let { video -> SaveToPlaylistSheet(vm, video, onDismiss = { saveVideo = null }) }
+
+        // Over everything: above the tabs and the mini player, or at the bottom of the player.
+        val playerOpen = current != null && !watch.isMini
+        ToastHost(vm, Modifier.padding(bottom = with(density) {
+            if (playerOpen || !access.ready) WindowInsets.navigationBars.getBottom(this).toDp() + 24.dp
+            else navHeightPx.toDp() + bottomPadding + 8.dp
+        }))
+    }
+}
+
+// The note at the bottom ("Removed from history"), with Undo when it can be undone; gone
+// after a few seconds.
+@Composable
+private fun ToastHost(vm: VesselViewModel, modifier: Modifier) {
+    val toast by vm.toast.collectAsStateWithLifecycle()
+    val shown: Toast = toast ?: return
+    LaunchedEffect(shown.id) {
+        delay(if (shown.undo != null) 5000 else 3000)
+        vm.dismissToast(shown)
+    }
+    Box(Modifier.fillMaxSize().statusBarsPadding(), contentAlignment = Alignment.BottomCenter) {
+        Row(modifier.padding(horizontal = 12.dp).fillMaxWidth()
+                .background(Palette.control, RoundedCornerShape(Metrics.radiusArt))
+                .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp).height(44.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(shown.message, Modifier.weight(1f), color = Palette.textPrimary, fontSize = 14.sp, maxLines = 2,
+                 overflow = TextOverflow.Ellipsis)
+            shown.undo?.let { undo ->
+                TextAction("Undo", {
+                    undo()
+                    vm.dismissToast(shown)
+                })
+            }
         }
     }
 }
@@ -230,10 +287,18 @@ private fun UpdateNotice(vm: VesselViewModel, modifier: Modifier = Modifier) {
 // A long press on a video: its menu, as a sheet.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun VideoMenu(vm: VesselViewModel, video: Video, onDismiss: () -> Unit, onOpenFolder: () -> Unit) {
+private fun VideoMenu(vm: VesselViewModel, video: Video, runner: FileRunner, onDismiss: () -> Unit, onOpenFolder: () -> Unit) {
     val actions = LocalAppActions.current
     val seen = LocalSeen.current[video.key]
     val context = LocalContext.current
+    // Rename, Move or Delete, open in place of the menu.
+    var fileAction by remember { mutableStateOf("") }
+
+    when (fileAction) {
+        "rename" -> { RenameVideoDialog(vm, runner, video, onDismiss); return }
+        "move" -> { MoveVideoSheet(vm, runner, video, onDismiss); return }
+        "delete" -> { DeleteVideo(vm, runner, video, onDismiss); return }
+    }
 
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Palette.dialog) {
         Row(Modifier.padding(horizontal = 20.dp).padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -249,8 +314,15 @@ private fun VideoMenu(vm: VesselViewModel, video: Video, onDismiss: () -> Unit, 
         if (seen?.finished == true) MenuItem(AppIcons.replay, "Mark as unwatched") { vm.setWatched(video, false); onDismiss() }
         else MenuItem(AppIcons.check, "Mark as watched") { vm.setWatched(video, true); onDismiss() }
         if (seen != null && !seen.finished)
-            MenuItem(AppIcons.history, "Remove from history") { vm.history.remove(video.key); onDismiss() }
+            MenuItem(AppIcons.history, "Remove from history") { vm.removeFromHistory(video); onDismiss() }
+        MenuItem(AppIcons.playlistAdd, "Save to playlist") { onDismiss(); actions.saveToPlaylist(video) }
         if (video.folder.isNotEmpty()) MenuItem(AppIcons.folderOpen, "Go to folder", onOpenFolder)
+        // The phone's own videos (not one another app handed over).
+        if (video.id >= 0) {
+            MenuItem(AppIcons.edit, "Rename") { fileAction = "rename" }
+            MenuItem(AppIcons.move, "Move to…") { fileAction = "move" }
+            MenuItem(AppIcons.delete, "Delete") { fileAction = "delete" }
+        }
         MenuItem(AppIcons.openInFull, "Share") {
             onDismiss()
             val send = Intent(Intent.ACTION_SEND).apply {

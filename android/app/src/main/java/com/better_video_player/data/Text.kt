@@ -68,6 +68,16 @@ fun dayHeading(ms: Long, now: Long = System.currentTimeMillis()): String {
 fun countText(count: Int, one: String, many: String): String =
     if (count == 1) "1 $one" else "$count $many"
 
+// The release year in a file name ("Speed (1994)", "Ne Zha 2019 1080p"), as the desktop's
+// yearIn(): the last 1920-2049 number that isn't part of a longer one, a resolution ("1920x")
+// or a GUID, and isn't in the future. 0 if there's none.
+fun yearIn(name: String): Int {
+    val withoutGuids = name.replace(Regex("[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", RegexOption.IGNORE_CASE), "")
+    val latest = Calendar.getInstance().get(Calendar.YEAR) + 1
+    return Regex("(?<![\\dx])(19[2-9]\\d|20[0-4]\\d)(?![\\dpx])", RegexOption.IGNORE_CASE).findAll(withoutGuids)
+        .map { it.groupValues[1].toInt() }.filter { it <= latest }.lastOrNull() ?: 0
+}
+
 // "A.Star.Is.Born.2018" -> "A Star Is Born 2018".
 fun prettyTitle(baseName: String): String =
     if (!baseName.contains(' ') && (baseName.contains('.') || baseName.contains('_')))

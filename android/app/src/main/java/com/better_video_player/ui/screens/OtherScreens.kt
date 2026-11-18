@@ -63,7 +63,12 @@ import com.better_video_player.ui.AppIcon
 import com.better_video_player.ui.AppIcons
 import com.better_video_player.ui.EmptyNote
 import com.better_video_player.ui.IconBtn
+import com.better_video_player.ui.LocalAppActions
 import com.better_video_player.ui.LogoMark
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.Color
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import com.better_video_player.ui.Metrics
 import com.better_video_player.ui.Palette
 import com.better_video_player.ui.PillButton
@@ -83,8 +88,13 @@ fun SearchScreen(vm: VesselViewModel, bottomPadding: Dp, onBack: () -> Unit) {
     val list = rememberLazyListState()
     LaunchedEffect(Unit) { focus.requestFocus() }
 
+    val recent by vm.settings.recentSearches.collectAsStateWithLifecycle()
+    val actions = LocalAppActions.current
+    var sort by rememberSaveable { mutableStateOf(VideoSort.Relevance) }
+    var filter by rememberSaveable(stateSaver = VideoFilter.saver) { mutableStateOf(VideoFilter()) }
+
     val keyed = remember(index) { index.videos.map { Triple(it, searchKey(it.title), searchKey(it.title + " " + it.relativePath)) } }
-    val results = remember(keyed, query) {
+    val matches = remember(keyed, query) {
         val q = searchKey(query)
         if (q.isEmpty()) return@remember emptyList()
         val words = q.split(' ')
@@ -93,6 +103,10 @@ fun SearchScreen(vm: VesselViewModel, bottomPadding: Dp, onBack: () -> Unit) {
         val allWords = keyed.filter { !it.second.contains(q) && words.all { w -> it.third.contains(w) } }
         (starts + contains + allWords).map { it.first }
     }
+    val results = sortVideos(filterVideos(matches, filter), sort)
+
+    // Remembered once it's been used: searched for, or a result played.
+    fun keepSearch() = vm.settings.addRecentSearch(query)
 
     Column(Modifier.fillMaxSize()) {
         PageBar(list.canScrollBackward) {
@@ -107,7 +121,7 @@ fun SearchScreen(vm: VesselViewModel, bottomPadding: Dp, onBack: () -> Unit) {
                     shape = CircleShape,
                     trailingIcon = if (query.isNotEmpty()) ({ IconBtn(AppIcons.close, onClick = { query = "" }, tint = Palette.textSecondary) }) else null,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
+                    keyboardActions = KeyboardActions(onSearch = { keyboard?.hide(); keepSearch() }),
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = Palette.surfaceHigh, unfocusedContainerColor = Palette.surfaceHigh,
                         focusedIndicatorColor = Palette.surfaceHigh, unfocusedIndicatorColor = Palette.surfaceHigh,
@@ -116,12 +130,38 @@ fun SearchScreen(vm: VesselViewModel, bottomPadding: Dp, onBack: () -> Unit) {
                 )
             }
         }
+        if (query.isNotBlank()) {
+            Row(Modifier.fillMaxWidth().padding(start = Metrics.pagePadding, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(countText(results.size, "video", "videos"), Modifier.weight(1f), color = Palette.textSecondary, fontSize = 14.sp)
+                FilterButton(filter, matches) { filter = it }
+                SortButton(VideoSort.entries.map { it to it.label }, sort) { sort = it }
+            }
+        }
         if (query.isNotBlank() && results.isEmpty())
-            EmptyNote("Nothing matches “$query”.", Modifier.padding(top = 16.dp), icon = AppIcons.search)
+            EmptyNote(if (matches.isEmpty()) "Nothing matches “$query”." else "Nothing matches “$query” with these filters.",
+                      Modifier.padding(top = 16.dp), icon = AppIcons.search)
         LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 8.dp, bottom = bottomPadding + 24.dp)) {
+            // Before typing: the last few searches.
+            if (query.isBlank() && recent.isNotEmpty()) {
+                item {
+                    Text("Recent searches", Modifier.padding(start = 8.dp, top = 8.dp, bottom = 4.dp), color = Palette.textSecondary,
+                         fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                }
+                items(recent, key = { "recent:$it" }) { text ->
+                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Metrics.radiusArt)).clickable { query = text }
+                            .padding(start = 12.dp, end = 0.dp, top = 2.dp, bottom = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        AppIcon(AppIcons.history, tint = Palette.textSecondary, size = 20.dp)
+                        Text(text, Modifier.weight(1f), color = Palette.textPrimary, fontSize = 15.sp, maxLines = 1,
+                             overflow = TextOverflow.Ellipsis)
+                        IconBtn(AppIcons.close, onClick = { vm.settings.removeRecentSearch(text) }, tint = Palette.textTertiary,
+                                iconSize = 18.dp, contentDescription = "Remove")
+                    }
+                }
+            }
             items(results, key = { it.key }) { v ->
                 VideoRow(v, listOf(v.folderName, durationText(v.durationMs)).filter { it.isNotEmpty() }.joinToString("  •  "),
-                         Modifier.fillMaxWidth(), thumbWidth = 140.dp)
+                         Modifier.fillMaxWidth(), thumbWidth = 140.dp, onClick = { keepSearch(); actions.play(v) })
             }
         }
     }
@@ -137,6 +177,7 @@ fun HistoryScreen(vm: VesselViewModel, bottomPadding: Dp, onBack: () -> Unit) {
 
     Column(Modifier.fillMaxSize()) {
         TitleBar("History", countText(watched.size, "video", "videos"), list.canScrollBackward, onBack = onBack) {
+            IconBtn(AppIcons.barChart, onClick = LocalAppActions.current::openStats, contentDescription = "Your stats")
             if (watched.isNotEmpty()) TextAction("Clear", { confirmClear = true })
         }
         if (watched.isEmpty())
@@ -151,7 +192,7 @@ fun HistoryScreen(vm: VesselViewModel, bottomPadding: Dp, onBack: () -> Unit) {
                     VideoRow(v, listOf(v.folderName, if (seen.finished) "Watched" else remainingText(seen.position, seen.duration))
                                     .filter { it.isNotEmpty() }.joinToString("  •  "),
                              Modifier.fillMaxWidth(), thumbWidth = 140.dp) {
-                        IconBtn(AppIcons.close, onClick = { vm.history.remove(v.key) }, tint = Palette.textSecondary,
+                        IconBtn(AppIcons.close, onClick = { vm.removeFromHistory(v) }, tint = Palette.textSecondary,
                                 contentDescription = "Remove from history")
                     }
                 }
@@ -164,8 +205,9 @@ fun HistoryScreen(vm: VesselViewModel, bottomPadding: Dp, onBack: () -> Unit) {
             onDismissRequest = { confirmClear = false },
             containerColor = Palette.dialog,
             title = { Text("Clear history?") },
-            text = { Text("Every video's progress is forgotten, and Continue watching is emptied. Your videos stay where they are.") },
-            confirmButton = { TextAction("Clear", { vm.history.clear(); confirmClear = false }) },
+            text = { Text("Every video's progress is forgotten, and Continue watching is emptied. Your videos stay where they are, " +
+                          "and so do your stats.") },
+            confirmButton = { TextAction("Clear", { vm.clearHistory(); confirmClear = false }) },
             dismissButton = { TextAction("Cancel", { confirmClear = false }) },
         )
     }
@@ -241,13 +283,12 @@ fun SettingsScreen(vm: VesselViewModel, bottomPadding: Dp, onOpenHistory: () -> 
                 Switch(alwaysMpv, { vm.settings.setAlwaysMpv(it) }, colors = switchColors())
             }
 
+            SubtitleSettings(vm)
+
             SectionTitle("History")
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Metrics.radiusCard)).background(Palette.surfaceHigh).clickable(onClick = onOpenHistory).padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                AppIcon(AppIcons.history, tint = Palette.accent)
-                Text("Watch history", Modifier.weight(1f), color = Palette.textPrimary, fontSize = 15.sp)
-                AppIcon(AppIcons.chevronRight, tint = Palette.textTertiary)
-            }
+            LinkRow(AppIcons.history, "Watch history", onOpenHistory)
+            Spacer(Modifier.height(8.dp))
+            LinkRow(AppIcons.barChart, "Your stats", LocalAppActions.current::openStats)
 
             SectionTitle("Updates")
             Row(Modifier.clickable { vm.settings.setCheckForUpdates(!checkForUpdates) }, verticalAlignment = Alignment.CenterVertically) {
@@ -267,6 +308,103 @@ fun SettingsScreen(vm: VesselViewModel, bottomPadding: Dp, onOpenHistory: () -> 
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun LinkRow(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Metrics.radiusCard)).background(Palette.surfaceHigh).clickable(onClick = onClick).padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        AppIcon(icon, tint = Palette.accent)
+        Text(text, Modifier.weight(1f), color = Palette.textPrimary, fontSize = 15.sp)
+        AppIcon(AppIcons.chevronRight, tint = Palette.textTertiary)
+    }
+}
+
+// Settings > Subtitles: how they look (as on the desktop, with a preview), and the folders
+// Vessel may look in for subtitle files next to videos.
+@Composable
+private fun SubtitleSettings(vm: VesselViewModel) {
+    val style by vm.settings.subtitleStyle.collectAsStateWithLifecycle()
+    val folders by vm.settings.subtitleFolders.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    // Android's folder picker; the access is kept across restarts.
+    val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                vm.settings.setSubtitleFolders((folders + uri.toString()).distinct())
+            } catch (e: SecurityException) {
+                vm.toast("Couldn't get access to that folder")
+            }
+        }
+    }
+
+    SectionTitle("Subtitles")
+    Note("How subtitles look. Styled subtitles (.ass) keep their own colours, but follow the size.")
+    // What they'll look like.
+    Box(Modifier.padding(top = 14.dp).fillMaxWidth().height(110.dp).clip(RoundedCornerShape(Metrics.radiusCard))
+            .background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color(0xFF3A4A5A), Color(0xFF1A2228)))),
+        contentAlignment = Alignment.BottomCenter) {
+        val box = style.background == "box"
+        val textColor = if (style.yellow) Color(0xFFFFE14D) else Color.White
+        Text("I'll see you tomorrow.",
+             Modifier.padding(bottom = 14.dp).then(if (box) Modifier.background(Color(0xC0000000), RoundedCornerShape(4.dp)) else Modifier)
+                 .padding(horizontal = 8.dp, vertical = 3.dp),
+             color = textColor, fontSize = (18 * style.scale).sp, fontWeight = FontWeight.SemiBold,
+             style = androidx.compose.ui.text.TextStyle(
+                 shadow = when (style.background) {
+                     "outline" -> androidx.compose.ui.graphics.Shadow(Color.Black, blurRadius = 6f)
+                     "none" -> androidx.compose.ui.graphics.Shadow(Color.Black, androidx.compose.ui.geometry.Offset(2f, 2f), 3f)
+                     else -> null
+                 }))
+    }
+    ChoiceRow("Size", listOf("small" to "Small", "medium" to "Medium", "large" to "Large", "xlarge" to "Extra large"), style.size) {
+        vm.settings.setSubtitleStyle(style.copy(size = it))
+    }
+    ChoiceRow("Colour", listOf("white" to "White", "yellow" to "Yellow"), style.color) {
+        vm.settings.setSubtitleStyle(style.copy(color = it))
+    }
+    ChoiceRow("Background", listOf("outline" to "Outline", "box" to "Dark box", "none" to "None"), style.background) {
+        vm.settings.setSubtitleStyle(style.copy(background = it))
+    }
+
+    Text("Folders to look in", Modifier.padding(top = 22.dp), color = Palette.textPrimary, fontSize = 15.sp)
+    Note("Vessel offers a subtitle file next to a video (\"Movie.en.srt\", or one in a Subs folder) when it plays, " +
+         "as on the desktop. Android doesn't let it see those files by itself: add the folders your videos are in " +
+         "(Movies, Download...) and it looks in them and the folders inside.")
+    for (folder in folders) {
+        Row(Modifier.padding(top = 8.dp).fillMaxWidth().background(Palette.surfaceHigh, RoundedCornerShape(Metrics.radiusArt))
+                .padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            AppIcon(AppIcons.folder, tint = Palette.accent, size = 20.dp)
+            Text(folderLabel(folder), Modifier.weight(1f).padding(start = 12.dp), color = Palette.textPrimary, fontSize = 14.sp,
+                 maxLines = 1, overflow = TextOverflow.Ellipsis)
+            IconBtn(AppIcons.close, onClick = {
+                try {
+                    context.contentResolver.releasePersistableUriPermission(Uri.parse(folder), Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (_: SecurityException) {}
+                vm.settings.setSubtitleFolders(folders - folder)
+            }, tint = Palette.textSecondary, contentDescription = "Remove")
+        }
+    }
+    Row(Modifier.padding(top = 10.dp)) {
+        PillButton("Add a folder", AppIcons.add, { pickFolder.launch(null) }, soft = true)
+    }
+}
+
+// "Phone storage/Movies", from a folder's tree URI ("…/tree/primary%3AMovies").
+private fun folderLabel(tree: String): String {
+    val id = try { android.provider.DocumentsContract.getTreeDocumentId(Uri.parse(tree)) } catch (e: Exception) { return tree }
+    val root = id.substringBefore(':')
+    return ((if (root == "primary") "Phone storage" else "SD card") + "/" + id.substringAfter(':', "")).trimEnd('/')
+}
+
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun ChoiceRow(title: String, options: List<Pair<String, String>>, selected: String, onSelect: (String) -> Unit) {
+    Text(title, Modifier.padding(top = 16.dp, bottom = 8.dp), color = Palette.textPrimary, fontSize = 15.sp)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        for ((value, label) in options) Chip(label, value == selected) { onSelect(value) }
     }
 }
 

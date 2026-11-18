@@ -81,6 +81,20 @@ class SavedSubtitles(private val dir: File, private val scope: CoroutineScope) {
         save()
     }
 
+    // The video was renamed or moved: its subtitles go with it.
+    fun relocate(from: String, to: String) {
+        val entry = _entries.value[from] ?: return
+        _entries.update { it - from + (to to entry) }
+        save()
+    }
+
+    // The video was deleted: its subtitles are let go (their files are swept on the next start).
+    fun forget(key: String) {
+        if (key !in _entries.value) return
+        _entries.update { it - key }
+        save()
+    }
+
     private fun load(): Map<String, VideoSubtitles> {
         if (!file.exists()) return emptyMap()
         return try {

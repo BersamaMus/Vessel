@@ -110,6 +110,8 @@ import com.better_video_player.ui.IconBtn
 import com.better_video_player.ui.Metrics
 import com.better_video_player.ui.Palette
 import com.better_video_player.ui.PillButton
+import com.better_video_player.ui.TextAction
+import androidx.compose.foundation.border
 import com.better_video_player.ui.VideoCard
 import com.better_video_player.ui.VideoRow
 import kotlinx.coroutines.Job
@@ -140,6 +142,8 @@ class WatchState {
     // A brief pill at the top of the video saying what just changed.
     var flashText by mutableStateOf("")
     var settingsOpen by mutableStateOf(false)
+    // The subtitle timing panel (SubtitleTimingPanel), over the top of the video.
+    var timingOpen by mutableStateOf(false)
     // A finger is dragging the player, which started out as the mini player or not. Its layout
     // keeps that shape until the finger lifts, so the drag's own handler isn't removed halfway.
     var dragging by mutableStateOf(false)
@@ -190,10 +194,15 @@ fun WatchLayer(vm: VesselViewModel, watch: WatchState, navHeight: Dp) {
     val pip = LocalInPictureInPicture.current
     val pipSetting by vm.settings.pictureInPicture.collectAsStateWithLifecycle()
     var videoBounds by remember { mutableStateOf<android.graphics.Rect?>(null) }
+    val picture by vm.picture.collectAsStateWithLifecycle()
+    val subtitleStyle by vm.settings.subtitleStyle.collectAsStateWithLifecycle()
+    val foundSubtitles by vm.foundSubtitles.collectAsStateWithLifecycle()
+    val seekPreview = rememberSeekPreview(video)
 
     // A new video opens on the watch page (from the mini player, it grows into it).
     LaunchedEffect(video.key) {
         watch.dismissX = 0f
+        watch.timingOpen = false
         endSwipeSeek(vm, watch, land = false)
         watch.wake()
         if (!watch.full) watch.expand()
@@ -254,6 +263,8 @@ fun WatchLayer(vm: VesselViewModel, watch: WatchState, navHeight: Dp) {
 
     BackHandler(enabled = watch.full) { watch.full = false }
     BackHandler(enabled = !watch.full && !watch.isMini) { scope.launch { watch.minimize() } }
+    // Back closes the timing panel first (the handler declared last is asked first).
+    BackHandler(enabled = watch.timingOpen && !watch.isMini) { watch.timingOpen = false }
 
     fun close() {
         vm.close()
@@ -419,6 +430,8 @@ fun WatchLayer(vm: VesselViewModel, watch: WatchState, navHeight: Dp) {
                                 // Still tapping on one side after a double tap: keep skipping.
                                 val side = if (offset.x < size.width * 0.35f) -1 else if (offset.x > size.width * 0.65f) 1 else 0
                                 if (watch.seekSide != 0 && side == watch.seekSide) seekBy(side)
+                                // A tap beside the timing panel closes it, as beside a menu.
+                                else if (watch.timingOpen) watch.timingOpen = false
                                 else if (watch.controlsShown) watch.controlsShown = false
                                 else watch.wake()
                             },
@@ -433,7 +446,8 @@ fun WatchLayer(vm: VesselViewModel, watch: WatchState, navHeight: Dp) {
                     }
                 )
         ) {
-            VideoSurface(engine)
+            VideoSurface(engine, picture = picture, subtitleStyle = subtitleStyle,
+                         videoRatio = if (ui.videoWidth > 0 && ui.videoHeight > 0) ui.videoWidth.toFloat() / ui.videoHeight else 0f)
 
             if (error != null && !watch.isMini) {
                 Text(error!!, Modifier.align(Alignment.Center).padding(24.dp), color = Palette.textSecondary,
@@ -443,10 +457,16 @@ fun WatchLayer(vm: VesselViewModel, watch: WatchState, navHeight: Dp) {
             if (!watch.isMini && !pip) {
                 SeekBubble(watch, side = -1)
                 SeekBubble(watch, side = 1)
-                if (watch.swipeToMs >= 0) SwipeSeekPill(watch, ui.durationMs, Modifier.align(Alignment.Center))
-                PlayerControls(vm, watch, ui, queue, countdown, autoplay, video, hasError = error != null, onMinimize = { scope.launch { watch.minimize() } })
+                if (watch.swipeToMs >= 0) SwipeSeekPill(watch, ui.durationMs, seekPreview, Modifier.align(Alignment.Center))
+                PlayerControls(vm, watch, ui, queue, countdown, autoplay, video, hasError = error != null, seekPreview,
+                               onMinimize = { scope.launch { watch.minimize() } })
+                foundSubtitles?.takeIf { it.videoKey == video.key }?.let { offer ->
+                    FoundSubtitlesPrompt(offer.subtitles.first().name, Modifier.align(Alignment.BottomCenter).padding(bottom = if (watch.full) 72.dp else 28.dp),
+                                         onAnswer = vm::answerFoundSubtitles)
+                }
                 if (ui.buffering && !watch.controlsShown)
                     CircularProgressIndicator(Modifier.align(Alignment.Center).size(48.dp), color = Palette.accent, strokeWidth = 3.dp)
+                if (watch.timingOpen) SubtitleTimingPanel(vm, watch, ui, Modifier.align(Alignment.TopCenter))
             }
             // While the controls are hidden on the watch page, a thin line still shows how far in.
             if (!watch.full && !pip && !watch.controlsShown && p < 0.2f && ui.durationMs > 0) {
@@ -566,15 +586,39 @@ private fun endSwipeSeek(vm: VesselViewModel, watch: WatchState, land: Boolean =
 
 // While swiping sideways to seek: how far, and where that lands ("+0:15", "12:34 / 45:00").
 @Composable
-private fun SwipeSeekPill(watch: WatchState, durationMs: Long, modifier: Modifier) {
+private fun SwipeSeekPill(watch: WatchState, durationMs: Long, preview: SeekPreview, modifier: Modifier) {
     val diff = (watch.swipeToMs - watch.swipeFromMs) / 1000.0
-    Column(
-        modifier.background(Palette.badge, RoundedCornerShape(16.dp)).padding(horizontal = 18.dp, vertical = 10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(2.dp),
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        // The frame it lands on, in full screen (on the watch page there's no room for it).
+        if (watch.full)
+            SeekPreviewBubble(preview, watch.swipeToMs, durationMs, Modifier.padding(bottom = 8.dp), width = 200.dp, showTime = false)
+        Column(
+            Modifier.background(Palette.badge, RoundedCornerShape(16.dp)).padding(horizontal = 18.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text((if (diff < 0) "-" else "+") + formatTime(abs(diff)), color = Palette.textPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text("${formatTime(watch.swipeToMs / 1000.0)} / ${formatTime(durationMs / 1000.0)}", color = Palette.textSecondary, fontSize = 13.sp)
+        }
+    }
+}
+
+// "Subtitles found" over the video, the first time it's opened (as on the desktop): a
+// subtitle file next to it, to turn on, or not; the answer is remembered.
+@Composable
+private fun FoundSubtitlesPrompt(name: String, modifier: Modifier, onAnswer: (Boolean) -> Unit) {
+    Row(
+        modifier.padding(horizontal = 12.dp).background(Color(0xF21C1C1C), RoundedCornerShape(14.dp))
+            .border(1.dp, Palette.border, RoundedCornerShape(14.dp)).padding(start = 14.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text((if (diff < 0) "-" else "+") + formatTime(abs(diff)), color = Palette.textPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        Text("${formatTime(watch.swipeToMs / 1000.0)} / ${formatTime(durationMs / 1000.0)}", color = Palette.textSecondary, fontSize = 13.sp)
+        AppIcon(AppIcons.subtitles, tint = Palette.accent, size = 20.dp)
+        Column(Modifier.weight(1f, fill = false).padding(start = 10.dp, end = 4.dp)) {
+            Text("Subtitles found", color = Palette.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Text(name, color = Palette.textSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        TextAction("No thanks", { onAnswer(false) })
+        TextAction("Turn on", { onAnswer(true) })
     }
 }
 
@@ -589,9 +633,11 @@ private fun androidx.compose.foundation.layout.BoxScope.PlayerControls(
     autoplay: Boolean,
     video: Video,
     hasError: Boolean,
+    preview: SeekPreview,
     onMinimize: () -> Unit,
 ) {
     var scrubbing by remember { mutableStateOf<Float?>(null) }
+    val picture by vm.picture.collectAsStateWithLifecycle()
     val shown = watch.controlsShown || scrubbing != null || countdown > 0
     val alpha by animateFloatAsState(if (shown) 1f else 0f, tween(200), label = "controls")
     val full = watch.full
@@ -611,7 +657,8 @@ private fun androidx.compose.foundation.layout.BoxScope.PlayerControls(
                 Text(if (full) video.title else "", Modifier.weight(1f), color = Palette.textPrimary, fontSize = 16.sp,
                      fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 IconBtn(AppIcons.settings, onClick = { watch.settingsOpen = true; watch.wake() }, enabled = shown,
-                        tint = if (ui.speed != 1f || ui.repeat) Palette.accent else Palette.textPrimary, contentDescription = "Settings")
+                        tint = if (ui.speed != 1f || ui.repeat || !picture.isDefault) Palette.accent else Palette.textPrimary,
+                        contentDescription = "Settings")
             }
 
             // Middle: previous, play/pause, next; or the "Up next" card while autoplay counts down.
@@ -682,6 +729,17 @@ private fun androidx.compose.foundation.layout.BoxScope.PlayerControls(
         )
     }
 
+    // While the seek bar is dragged: the frame there, above the thumb (as on the desktop).
+    scrubbing?.let { f ->
+        BoxWithConstraints(Modifier.matchParentSize()) {
+            val bubble = if (full) 200.dp else 140.dp
+            val x = (maxWidth * f - bubble / 2).coerceIn(8.dp, (maxWidth - bubble - 8.dp).coerceAtLeast(8.dp))
+            SeekPreviewBubble(preview, (f * ui.durationMs).toLong(), ui.durationMs,
+                              Modifier.align(Alignment.BottomStart).offset(x = x).padding(bottom = if (full) 84.dp else 22.dp)
+                                  .width(bubble), width = bubble)
+        }
+    }
+
     // What just changed ("Speed 1.5×").
     if (watch.flashText.isNotEmpty()) {
         Text(watch.flashText,
@@ -716,6 +774,7 @@ private fun WatchDetails(
     modifier: Modifier,
 ) {
     val list = rememberLazyListState()
+    val actions = com.better_video_player.ui.LocalAppActions.current
     var queueOpen by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(video.key) { list.scrollToItem(0) }
 
@@ -730,6 +789,12 @@ private fun WatchDetails(
                             if (video.addedMs > 0) "Added ${dateText(video.addedMs)}" else "")
                          .filter { it.isNotEmpty() }.joinToString("  •  "),
                      color = Palette.textSecondary, fontSize = 13.sp)
+                // Save to a playlist (as beside the title on the desktop), and the video's menu.
+                Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    PillButton("Save", AppIcons.playlistAdd, { actions.saveToPlaylist(video) }, soft = true)
+                    if (video.id >= 0) PillButton("More", AppIcons.more, { actions.showVideoMenu(video) }, soft = true)
+                }
                 FileInfo(vm, video, ui)
             }
         }

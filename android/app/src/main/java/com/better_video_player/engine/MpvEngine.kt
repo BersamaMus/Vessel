@@ -14,6 +14,7 @@ import android.os.Looper
 import android.util.Log
 import android.view.Surface
 import androidx.core.content.ContextCompat
+import com.better_video_player.data.SubtitleStyle
 import com.better_video_player.data.mpvCodecName
 import dev.jdtech.mpv.MPVLib
 import dev.jdtech.mpv.MPVLib.MpvEvent
@@ -76,6 +77,8 @@ class MpvEngine(context: Context) : VideoEngine, MPVLib.EventObserver {
         // libass needs fonts for subtitles: the phone's own.
         mpv.setOptionString("sub-fonts-dir", "/system/fonts")
         mpv.setOptionString("sub-font", "Roboto")
+        // Room for the volume boost (setVolumeBoost).
+        mpv.setOptionString("volume-max", "200")
         mpv.init()
 
         for ((property, type) in listOf(
@@ -164,6 +167,8 @@ class MpvEngine(context: Context) : VideoEngine, MPVLib.EventObserver {
         mpv.setPropertyString("loop-file", "no")
         mpv.setPropertyString("sid", "auto")
         mpv.setPropertyString("aid", "auto")
+        // sub-delay carries over to the next file: each starts with the file's own timing.
+        setSubtitleDelay(0)
         mpv.setPropertyBoolean("pause", false)
         pendingStarts++
         mpv.command(arrayOf("loadfile", url, "replace"))
@@ -238,6 +243,36 @@ class MpvEngine(context: Context) : VideoEngine, MPVLib.EventObserver {
     override fun selectTrack(type: TrackType, track: TrackInfo?) {
         mpv.setPropertyString(if (type == TrackType.Audio) "aid" else "sid", track?.id ?: "no")
         main.postDelayed({ if (!released) { readTracks(); changed() } }, 100)
+    }
+
+    // As the desktop's applySubtitleStyle(). A styled subtitle (.ass) keeps its own colours
+    // but follows the size.
+    override fun setSubtitleStyle(style: SubtitleStyle) {
+        mpv.setPropertyDouble("sub-scale", style.scale.toDouble())
+        mpv.setPropertyString("sub-color", if (style.yellow) "#FFFFE14D" else "#FFFFFFFF")
+        mpv.setPropertyString("sub-border-style", if (style.background == "box") "background-box" else "outline-and-shadow")
+        mpv.setPropertyString("sub-back-color", "#C0000000")
+        // "None" keeps a soft shadow, so white text stays readable on a bright picture.
+        mpv.setPropertyDouble("sub-outline-size", if (style.background == "none") 0.0 else 1.65)
+        mpv.setPropertyDouble("sub-shadow-offset", if (style.background == "none") 1.5 else 0.0)
+    }
+
+    override fun setPicture(picture: Picture) {
+        mpv.setPropertyString("video-aspect-override", picture.aspect.ifEmpty { "-1" })
+        mpv.setPropertyDouble("panscan", if (picture.fill) 1.0 else 0.0)
+        mpv.setPropertyString("video-rotate", picture.rotation.toString())
+    }
+
+    override fun setVolumeBoost(percent: Int) {
+        mpv.setPropertyDouble("volume", percent.coerceIn(100, 200).toDouble())
+    }
+
+    override var subtitleDelayMs = 0L
+        private set
+
+    override fun setSubtitleDelay(ms: Long) {
+        subtitleDelayMs = ms
+        mpv.setPropertyDouble("sub-delay", ms / 1000.0)
     }
 
     override fun release() {
@@ -345,6 +380,8 @@ class MpvEngine(context: Context) : VideoEngine, MPVLib.EventObserver {
         val result = mutableListOf<TrackInfo>()
         var audio = 0
         var subs = 0
+        var ownAudio = 0
+        var ownSubs = 0
         for (i in 0 until count) {
             val type = when (mpv.getPropertyString("track-list/$i/type")) {
                 "audio" -> TrackType.Audio
@@ -352,14 +389,17 @@ class MpvEngine(context: Context) : VideoEngine, MPVLib.EventObserver {
                 else -> continue
             }
             val id = mpv.getPropertyInt("track-list/$i/id") ?: continue
+            val file = mpv.getPropertyString("track-list/$i/external-filename")
             val number = if (type == TrackType.Audio) ++audio else ++subs
+            // Among the video's own tracks only (as ExoEngine counts them).
+            val place = if (file != null) 0 else if (type == TrackType.Audio) ++ownAudio else ++ownSubs
             val title = mpv.getPropertyString("track-list/$i/title")
             val language = languageName(mpv.getPropertyString("track-list/$i/lang"))
             val channels = channelsText(mpv.getPropertyInt("track-list/$i/demux-channel-count") ?: 0)
             val label = listOf(title ?: language ?: "Track $number", if (title != null) language ?: "" else "", channels)
                 .filter { it.isNotEmpty() }.distinct().joinToString("  ·  ")
             result += TrackInfo(type, id.toString(), label, mpv.getPropertyBoolean("track-list/$i/selected") == true,
-                                mpv.getPropertyString("track-list/$i/external-filename"))
+                                file, place)
         }
         trackList = result
     }

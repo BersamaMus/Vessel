@@ -45,7 +45,8 @@ private val CardWidth = 240.dp
 private val FolderWidth = 200.dp
 private val shelfPadding = PaddingValues(horizontal = Metrics.pagePadding)
 
-// Continue watching, Quick picks, Recently added and Folders, under a bar with the logo.
+// Continue watching, Quick picks, History, Recently added and Folders, under a bar with the
+// logo (as the desktop's Home).
 @Composable
 fun HomeScreen(vm: VesselViewModel, bottomPadding: Dp, onSeeAllFolders: () -> Unit) {
     val actions = LocalAppActions.current
@@ -54,6 +55,7 @@ fun HomeScreen(vm: VesselViewModel, bottomPadding: Dp, onSeeAllFolders: () -> Un
     val continueWatching by vm.continueWatching.collectAsStateWithLifecycle()
     val picks by vm.quickPicks.collectAsStateWithLifecycle()
     val recent by vm.recentlyAdded.collectAsStateWithLifecycle()
+    val watched by vm.watched.collectAsStateWithLifecycle()
     val seen = LocalSeen.current
     val list = rememberLazyListState()
     val hasVideos = index.videos.isNotEmpty()
@@ -104,6 +106,18 @@ fun HomeScreen(vm: VesselViewModel, bottomPadding: Dp, onSeeAllFolders: () -> Un
                     items(picks, key = { it.key }) { v ->
                         val subtitle = listOf(v.folderName, durationText(v.durationMs)).filter { it.isNotEmpty() }.joinToString("  •  ")
                         VideoRow(v, subtitle, Modifier.width(320.dp).height(72.dp), thumbWidth = 96.dp, titleLines = 1)
+                    }
+                }
+            }
+
+            // --- History ---------------------------------------------------------
+            if (watched.isNotEmpty()) {
+                item { ShelfHeader("History", actionLabel = "See all", onAction = actions::openHistory) }
+                item {
+                    LazyRow(contentPadding = shelfPadding, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        items(watched.take(20), key = { it.first.key }) { (v, s) ->
+                            VideoCard(v, if (s.finished) "Watched" else remainingText(s.position, s.duration), Modifier.width(CardWidth))
+                        }
                     }
                 }
             }

@@ -16,6 +16,18 @@ import com.better_video_player.data.SavedSubtitles
 import com.better_video_player.data.SubtitleException
 import com.better_video_player.data.SubtitleLimitException
 import com.better_video_player.data.SubtitleResult
+import com.better_video_player.data.SubtitleTiming
+import com.better_video_player.data.FileOutcome
+import com.better_video_player.data.FoundSubtitle
+import com.better_video_player.data.Playlist
+import com.better_video_player.data.Playlists
+import com.better_video_player.data.SubtitleFinder
+import com.better_video_player.data.TrackChoice
+import com.better_video_player.data.TrackChoices
+import com.better_video_player.data.VideoFiles
+import com.better_video_player.data.WatchStats
+import com.better_video_player.data.renamedFileName
+import com.better_video_player.engine.Picture
 import com.better_video_player.data.Seen
 import com.better_video_player.data.UpdateCheck
 import com.better_video_player.data.Video
@@ -62,7 +74,14 @@ data class LibraryIndex(
     // By name.
     val folders: List<Folder> = emptyList(),
     val byFolder: Map<String, Folder> = emptyMap(),
+    val byKey: Map<String, Video> = emptyMap(),
 )
+
+// A note at the bottom of the app ("Removed from history"), with Undo when it can be undone.
+data class Toast(val message: String, val undo: (() -> Unit)? = null, val id: Long = System.nanoTime())
+
+// "Subtitles found" for the video playing: subtitle files next to it, offered once.
+data class FoundSubtitlesOffer(val videoKey: String, val subtitles: List<FoundSubtitle>)
 
 // The list beside the video: Play all / Shuffle's list, or else the video's folder.
 data class Queue(
@@ -90,10 +109,27 @@ data class SubtitleSearchState(
     val error: String = "",
 )
 
+// The timing of the subtitles showing: which track they are (see SubtitleTiming; "" while
+// subtitles are off), and how much later than their file says they show (ms, negative: earlier).
+data class SubtitleTimingState(val track: String = "", val delayMs: Long = 0) {
+    val subtitlesOn: Boolean get() = track.isNotEmpty()
+}
+
+// "0.5 s later", for a subtitle delay.
+fun delayText(delayMs: Long): String {
+    val seconds = "%.1f".format(kotlin.math.abs(delayMs) / 1000.0)
+    return when {
+        kotlin.math.abs(delayMs) < 50 -> "Original timing"
+        delayMs > 0 -> "$seconds s later"
+        else -> "$seconds s earlier"
+    }
+}
+
 // A subtitle file bigger than this (10 MB) is something else picked by mistake.
 private const val MAX_SUBTITLE_BYTES = 10 * 1024 * 1024
 
-private data class Playlist(val name: String, val videos: List<Video>, val shuffled: Boolean)
+// The list Play all / Shuffle (or a playlist) plays, in order.
+private data class PlayList(val name: String, val videos: List<Video>, val shuffled: Boolean)
 
 class VesselViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -102,6 +138,12 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
     val settings = AppSettings(app)
     val savedSubtitles = SavedSubtitles(app.filesDir, viewModelScope)
     val openSubtitles = OpenSubtitles(app)
+    private val timing = SubtitleTiming(app.filesDir, viewModelScope)
+    private val choices = TrackChoices(app.filesDir, viewModelScope)
+    val playlists = Playlists(app.filesDir, viewModelScope)
+    val stats = WatchStats(app.filesDir, viewModelScope)
+    private val files = VideoFiles(app)
+    private val subtitleFinder = SubtitleFinder(app)
 
     // Thumbnails (and durations) for the videos Android can't read: see MpvThumbnailer.
     val thumbnailer = MpvThumbnailer(app, viewModelScope)
@@ -121,7 +163,7 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
                     videos = inFolder.sortedWith(compareBy(NaturalOrder) { it.fileName }),
                 )
             }.sortedWith(compareBy(NaturalOrder) { it.name })
-            LibraryIndex(videos, folders, folders.associateBy { it.key })
+            LibraryIndex(videos, folders, folders.associateBy { it.key }, videos.associateBy { it.key })
         }
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.Eagerly, LibraryIndex())
@@ -165,6 +207,7 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
     private fun mpv(): MpvEngine? = mpvEngine ?: try {
         MpvEngine(getApplication()).also {
             it.addListener(listenerFor(it))
+            it.setSubtitleStyle(settings.subtitleStyle.value)
             mpvEngine = it
         }
     } catch (e: Throwable) {
@@ -175,7 +218,7 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
     private val _current = MutableStateFlow<Video?>(null)
     val current: StateFlow<Video?> = _current
 
-    private val playlist = MutableStateFlow<Playlist?>(null)
+    private val playlist = MutableStateFlow<PlayList?>(null)
 
     val queue: StateFlow<Queue?> = combine(_current, playlist, index) { video, list, index ->
         when {
@@ -217,6 +260,12 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
 
     // Events from an engine that isn't the one playing (ExoPlayer after mpv took over) are ignored.
     private fun listenerFor(source: VideoEngine) = object : EngineListener {
+        override fun onChanged() {
+            if (source !== player || switching) return
+            applyTrackChoices()
+            followSubtitleTrack()
+        }
+
         override fun onEnded() {
             if (source !== player) return
             saveProgress()
@@ -229,6 +278,7 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
             if (source !== player || switching) return
             saveJob?.cancel()
             if (isPlaying) {
+                playingSince = android.os.SystemClock.elapsedRealtime()
                 cancelAutoplay()   // e.g. seeked back from the end
                 // Saved now and then, in case the app is closed unexpectedly.
                 saveJob = viewModelScope.launch {
@@ -239,6 +289,7 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
                 }
             } else {
                 saveProgress()
+                playingSince = 0
             }
         }
 
@@ -258,6 +309,8 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
         PlaybackService.player = sessionPlayer
         sessionController = MediaController.Builder(app, SessionToken(app, ComponentName(app, PlaybackService::class.java))).buildAsync()
         if (settings.checkForUpdates.value) viewModelScope.launch { _newerVersion.value = UpdateCheck.newerVersion() }
+        // mpv draws subtitles itself (ExoPlayer's are drawn by VideoSurface).
+        viewModelScope.launch { settings.subtitleStyle.collect { style -> mpvEngine?.setSubtitleStyle(style) } }
     }
 
     fun dismissUpdate() {
@@ -287,6 +340,10 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun switchTo(engine: VideoEngine, video: Video, startMs: Long) {
         saveJob?.cancel()
+        // The time played so far is counted now: the engine's "stopped playing" while
+        // switching is ignored, and the next video may never start (it can fail to open).
+        countWatchTime()
+        playingSince = 0
         switching = true
         try {
             if (player !== engine) {
@@ -295,10 +352,17 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
                 old.stop()
             }
             _error.value = null
+            // open() starts the engine on the file's own timing; the track's is set once its
+            // tracks are known (followSubtitleTrack).
+            _subtitleTiming.value = SubtitleTimingState()
             // With the subtitles added to it before, and the one that was on.
             val saved = savedSubtitles.get(video.key)
             val subtitles = saved.present.map(::external)
             engine.open(video.uri, startMs, subtitles, subtitles.firstOrNull { it.file.path == saved.chosen })
+            // The audio track and subtitle picked last time, once its tracks are known.
+            pendingChoice = choices.get(video.key)
+            engine.setPicture(_picture.value)
+            engine.setVolumeBoost(_volumeBoost.value)
         } finally {
             switching = false
         }
@@ -323,22 +387,28 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
         saveProgress()
         cancelAutoplay()
         _notice.value = ""
+        _foundSubtitles.value = null
         _current.value = video
+        // Each video starts with its own picture (as on the desktop).
+        _picture.value = Picture()
+        stats.notePlay(video.key)
         switchTo(engineFor(video), video, (history.resumePosition(video.key) * 1000).toLong())
+        lookForSubtitleFiles(video)
         _suggestions.value = index.value.videos.filter { it.folder != video.folder || video.folder.isEmpty() }
             .filter { it.key != video.key }
             .shuffled()
             .take(SUGGESTIONS)
     }
 
-    // Play all and Shuffle: from the first video in the list.
-    fun playAll(name: String, videos: List<Video>, shuffle: Boolean) {
+    // Play all and Shuffle: from the first video in the list, or (a playlist's video picked)
+    // from `start` on.
+    fun playAll(name: String, videos: List<Video>, shuffle: Boolean, start: Video? = null) {
         if (videos.isEmpty()) return
         val list = if (shuffle) videos.shuffled() else videos
-        playlist.value = Playlist(name, list, shuffle)
+        playlist.value = PlayList(name, list, shuffle)
         saveProgress()          // open() can't: _current is cleared first
         _current.value = null   // so the first video opens even if it's the one playing
-        open(list.first())
+        open(start?.takeIf { s -> list.any { it.key == s.key } } ?: list.first())
     }
 
     // A file another app asked us to play ("Open with"). One of the phone's own videos is
@@ -380,10 +450,264 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
     fun setRepeat(on: Boolean) = player.setRepeat(on)
 
     fun selectTrack(type: TrackType, track: TrackInfo?) {
+        val tracks = player.tracks
         player.selectTrack(type, track)
-        // Whether one of the subtitles added to it is on, for next time.
-        val video = _current.value
-        if (type == TrackType.Subtitle && video != null) savedSubtitles.choose(video.key, track?.file)
+        pendingChoice = null
+        val video = _current.value ?: return
+        // Remembered for next time, as on the desktop: one of the subtitle files added to it
+        // (SavedSubtitles), or one built into the video, or off (TrackChoices); the audio track.
+        if (type == TrackType.Subtitle) {
+            savedSubtitles.choose(video.key, track?.file)
+            val choice = when {
+                track == null -> "off"
+                track.file != null -> null
+                else -> trackKeyOf(track)
+            }
+            choices.update(video.key) { it.copy(subtitle = choice) }
+        } else if (track != null) {
+            choices.update(video.key) { it.copy(audio = trackKeyOf(track)) }
+        }
+    }
+
+    // --- Remembered tracks ----------------------------------------------------
+    // What was picked last time for the video being opened, until its tracks are known.
+    private var pendingChoice: TrackChoice? = null
+
+    // A track as TrackChoices and SubtitleTiming know it: a subtitle file by its path, else
+    // by its place among the video's own tracks of its type ("#1"), which both engines count
+    // the same way (TrackInfo.place).
+    private fun trackKeyOf(track: TrackInfo): String = track.file ?: "#${track.place}"
+
+    private fun trackFor(key: String, type: TrackType, tracks: List<TrackInfo>): TrackInfo? =
+        tracks.filter { it.type == type }.firstOrNull { trackKeyOf(it) == key }
+
+    private fun applyTrackChoices() {
+        val choice = pendingChoice ?: return
+        val video = _current.value ?: return
+        val tracks = player.tracks
+        if (tracks.isEmpty()) return
+        pendingChoice = null
+        choice.audio?.let { key ->
+            trackFor(key, TrackType.Audio, tracks)?.takeIf { !it.selected }?.let { player.selectTrack(TrackType.Audio, it) }
+        }
+        // A subtitle file turned on (SavedSubtitles) was already asked for in open().
+        if (savedSubtitles.get(video.key).chosen != null) return
+        when (val key = choice.subtitle) {
+            null -> {}
+            "off" -> if (tracks.any { it.type == TrackType.Subtitle && it.selected }) player.selectTrack(TrackType.Subtitle, null)
+            else -> trackFor(key, TrackType.Subtitle, tracks)?.takeIf { !it.selected }?.let { player.selectTrack(TrackType.Subtitle, it) }
+        }
+    }
+
+    // --- Picture and sound (the player's More menu) ------------------------------
+    private val _picture = MutableStateFlow(Picture())
+    val picture: StateFlow<Picture> = _picture
+
+    fun setPicture(picture: Picture) {
+        _picture.value = picture
+        player.setPicture(picture)
+    }
+
+    // Louder than the phone's maximum, from the volume keys (see MainActivity): 100 to 200
+    // percent. For this run of the app only, so it can't surprise anyone the next time.
+    private val _volumeBoost = MutableStateFlow(100)
+    val volumeBoost: StateFlow<Int> = _volumeBoost
+
+    fun setVolumeBoost(percent: Int) {
+        val p = percent.coerceIn(100, 200)
+        _volumeBoost.value = p
+        player.setVolumeBoost(p)
+    }
+
+    // A volume key past the phone's maximum (see MainActivity): `step` more (or less), said
+    // over the video.
+    fun boostVolume(step: Int) {
+        setVolumeBoost(_volumeBoost.value + step)
+        _notice.value = if (_volumeBoost.value == 100) "Volume 100%" else "Volume boost ${_volumeBoost.value}%"
+    }
+
+    // --- Notes with Undo ------------------------------------------------------
+    private val _toast = MutableStateFlow<Toast?>(null)
+    val toast: StateFlow<Toast?> = _toast
+
+    fun toast(message: String, undo: (() -> Unit)? = null) {
+        _toast.value = Toast(message, undo)
+    }
+
+    fun dismissToast(toast: Toast) {
+        _toast.update { if (it?.id == toast.id) null else it }
+    }
+
+    // --- History edits (with Undo) ----------------------------------------------
+    fun removeFromHistory(video: Video) {
+        val before = history.get(video.key) ?: return
+        history.remove(video.key)
+        toast("Removed from history") { history.restore(video.key, before) }
+    }
+
+    fun clearHistory() {
+        val before = history.entries.value
+        history.clear()
+        toast("History cleared") { history.restoreAll(before) }
+    }
+
+    // --- Playlists --------------------------------------------------------------
+    // A playlist's videos that are on the phone, in its order.
+    fun videosOf(playlist: Playlist): List<Video> {
+        val byKey = index.value.byKey
+        return playlist.keys.mapNotNull { byKey[it] }
+    }
+
+    fun removeFromPlaylist(id: String, video: Video) {
+        val playlist = playlists.get(id) ?: return
+        val at = playlists.remove(id, video.key)
+        if (at >= 0) toast("Removed from ${playlist.name}") { playlists.add(id, video.key, at) }
+    }
+
+    fun deletePlaylist(id: String) {
+        val (deleted, at) = playlists.delete(id) ?: return
+        toast("Deleted “${deleted.name}”") { playlists.restore(deleted, at) }
+    }
+
+    // --- Renaming, moving and deleting files --------------------------------------
+    // Each returns what came of it; NeedsConsent goes to the user first (see FileActions in
+    // the UI), and its retry does the rest.
+    // The player lets go of the video just before the file is changed (it may be holding it
+    // open), not before: if the user says no in Android's dialog, it plays on.
+    suspend fun renameVideo(video: Video, name: String): FileOutcome =
+        afterFileChange(video, files.rename(video, name) { releaseIfPlaying(video) },
+                        video.folder + renamedFileName(video, name))
+
+    suspend fun moveVideo(video: Video, relativePath: String): FileOutcome =
+        afterFileChange(video, files.move(video, relativePath) { releaseIfPlaying(video) },
+                        "${video.volume}:$relativePath${video.fileName}")
+
+    suspend fun deleteVideo(video: Video): FileOutcome =
+        whenDone(files.delete(video) { releaseIfPlaying(video) }) {
+            forget(video.key)
+            library.refresh()
+        }
+
+    private fun afterFileChange(video: Video, outcome: FileOutcome, newKey: String): FileOutcome =
+        whenDone(outcome) {
+            relocate(video.key, newKey)
+            library.refresh()
+        }
+
+    // Runs `done` once the outcome is Done: now, or after the user agrees and the retry works.
+    private fun whenDone(outcome: FileOutcome, done: () -> Unit): FileOutcome = when (outcome) {
+        FileOutcome.Done -> { done(); outcome }
+        is FileOutcome.NeedsConsent -> FileOutcome.NeedsConsent(outcome.request) { whenDone(outcome.retry(), done) }
+        is FileOutcome.Failed -> outcome
+    }
+
+    // The player lets go of a file before it's changed (it may be holding it open).
+    private fun releaseIfPlaying(video: Video) {
+        if (_current.value?.key == video.key) close()
+    }
+
+    // A video was renamed or moved: everything kept for it follows it, as the desktop's relocate().
+    private fun relocate(from: String, to: String) {
+        if (from == to) return
+        history.relocate(from, to)
+        savedSubtitles.relocate(from, to)
+        timing.relocate(from, to)
+        choices.relocate(from, to)
+        playlists.relocate(from, to)
+        stats.relocate(from, to)
+        settings.relocateMpv(from, to)
+    }
+
+    // A video was deleted: nothing kept for it is left behind for another file that gets the
+    // same name and folder later.
+    private fun forget(key: String) {
+        history.remove(key)
+        savedSubtitles.forget(key)
+        timing.forget(key)
+        choices.forget(key)
+        playlists.forget(key)
+        stats.forget(key)
+        settings.setUsesMpv(key, false)
+    }
+
+    // Folders a video can be moved to: the library's on the same storage, and Movies.
+    fun moveTargets(video: Video): List<String> =
+        (index.value.folders.mapNotNull { f -> f.videos.firstOrNull()?.takeIf { it.volume == video.volume }?.relativePath } + "Movies/")
+            .distinct().filter { it != video.relativePath }.sortedWith(compareBy(NaturalOrder) { it })
+
+    // --- Subtitle files next to the video ("Subtitles found") ---------------------
+    private val _foundSubtitles = MutableStateFlow<FoundSubtitlesOffer?>(null)
+    val foundSubtitles: StateFlow<FoundSubtitlesOffer?> = _foundSubtitles
+    private var findJob: Job? = null
+
+    // Looks in the folders the user let Vessel read. The first time, it asks; after "Turn on"
+    // the file is added each time (as one picked by hand), after "No thanks" it isn't offered.
+    private fun lookForSubtitleFiles(video: Video) {
+        findJob?.cancel()
+        val trees = settings.subtitleFolders.value
+        if (trees.isEmpty() || choices.get(video.key).found == "off") return
+        findJob = viewModelScope.launch {
+            val found = withContext(Dispatchers.IO) { subtitleFinder.find(video, trees) }
+            if (found.isEmpty() || _current.value?.key != video.key) return@launch
+            // Already added: nothing to ask.
+            val saved = savedSubtitles.get(video.key).present
+            val new = found.filterNot { f -> saved.any { it.title == f.name.substringBeforeLast('.') } }
+            if (new.isEmpty()) return@launch
+            if (choices.get(video.key).found == "on") addFoundSubtitle(video, new.first())
+            else _foundSubtitles.value = FoundSubtitlesOffer(video.key, new)
+        }
+    }
+
+    fun answerFoundSubtitles(turnOn: Boolean) {
+        val offer = _foundSubtitles.value ?: return
+        _foundSubtitles.value = null
+        choices.update(offer.videoKey) { it.copy(found = if (turnOn) "on" else "off") }
+        val video = _current.value?.takeIf { it.key == offer.videoKey } ?: return
+        if (turnOn) addFoundSubtitle(video, offer.subtitles.first())
+    }
+
+    private fun addFoundSubtitle(video: Video, subtitle: FoundSubtitle) {
+        if (_current.value?.key == video.key) addSubtitleFile(subtitle.uri) { toast(it) }
+    }
+
+    // --- Subtitles from outside the video --------------------------------------
+
+    // --- Subtitle timing ---------------------------------------------------------
+    // For subtitles out of step with the video: shown earlier or later, without changing any
+    // file, and remembered for that video and track (as on the desktop).
+    private val _subtitleTiming = MutableStateFlow(SubtitleTimingState())
+    val subtitleTiming: StateFlow<SubtitleTimingState> = _subtitleTiming
+
+    // The subtitle track on, as SubtitleTiming knows it (see trackKeyOf); "" if none is on.
+    private fun timingTrackOf(tracks: List<TrackInfo>): String =
+        tracks.firstOrNull { it.type == TrackType.Subtitle && it.selected }?.let(::trackKeyOf) ?: ""
+
+    // Each track gets the timing fixed for it before, once it's on. While subtitles are off
+    // (or the tracks are being reloaded, see ExoEngine.addSubtitle), the engine is left as it is.
+    private fun followSubtitleTrack() {
+        val video = _current.value ?: return
+        val track = timingTrackOf(player.tracks)
+        if (track == _subtitleTiming.value.track) return
+        val delay = if (track.isEmpty()) player.subtitleDelayMs else timing.get(video.key, track)
+        if (track.isNotEmpty()) player.setSubtitleDelay(delay)
+        _subtitleTiming.value = SubtitleTimingState(track, delay)
+    }
+
+    // Shows the subtitles on `stepMs` later (negative: earlier).
+    fun shiftSubtitles(stepMs: Long) {
+        setSubtitleDelay(_subtitleTiming.value.delayMs + stepMs)
+    }
+
+    fun resetSubtitleTiming() = setSubtitleDelay(0)
+
+    private fun setSubtitleDelay(ms: Long) {
+        val video = _current.value ?: return
+        val track = _subtitleTiming.value.track
+        if (track.isEmpty()) return
+        val delay = ms.coerceIn(-MAX_SUBTITLE_DELAY_MS, MAX_SUBTITLE_DELAY_MS)
+        player.setSubtitleDelay(delay)
+        timing.set(video.key, track, delay)
+        _subtitleTiming.value = SubtitleTimingState(track, delay)
     }
 
     // --- Subtitles from outside the video --------------------------------------
@@ -523,7 +847,10 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
 
     fun close() {
         saveProgress()
+        playingSince = 0
         cancelAutoplay()
+        findJob?.cancel()
+        _foundSubtitles.value = null
         player.stop()
         playlist.value = null
         _current.value = null
@@ -557,15 +884,34 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
 
     // --- History ---------------------------------------------------------------
     fun saveProgress() {
+        countWatchTime()
         val video = _current.value ?: return
         val duration = player.durationMs
         if (duration <= 0) return
         val position = if (player.phase == Phase.Ended) duration else player.positionMs
+        val wasFinished = history.get(video.key)?.finished == true
         history.save(video.key, position / 1000.0, duration / 1000.0)
+        // Played to the end (for the stats), once each time it gets there.
+        if (!wasFinished && history.get(video.key)?.finished == true) stats.noteFinished(video.key)
+    }
+
+    // --- Watch stats --------------------------------------------------------------
+    // When the video last started playing, or the time was last counted (elapsedRealtime);
+    // 0 while nothing plays.
+    private var playingSince = 0L
+
+    // The time since then goes to the stats: the time that passed, whatever the speed.
+    private fun countWatchTime() {
+        if (playingSince <= 0) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        stats.addWatchTime((now - playingSince) / 1000.0)
+        playingSince = now
     }
 
     fun setWatched(video: Video, watched: Boolean) {
+        val before = history.get(video.key)
         history.setWatched(video.key, watched, video.durationSeconds)
+        toast(if (watched) "Marked as watched" else "Marked as unwatched") { history.restore(video.key, before) }
     }
 
     // The app went into the background (or the screen off): the sound carries on if that's
@@ -574,6 +920,7 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
         if (!inPictureInPicture && !settings.backgroundPlay.value) player.pause()
         saveProgress()
         history.flush()
+        stats.flush()
     }
 
     // The picture-in-picture window was closed: as on YouTube, playback stops.
@@ -581,12 +928,14 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
         player.pause()
         saveProgress()
         history.flush()
+        stats.flush()
     }
 
     override fun onCleared() {
         // viewModelScope is already cancelled here, so the history is written right away.
         saveProgress()
         history.writeNow()
+        stats.writeNow()
         library.stop()
         MediaController.releaseFuture(sessionController)
         PlaybackService.player = null
@@ -601,6 +950,8 @@ class VesselViewModel(app: Application) : AndroidViewModel(app) {
         const val SHELF_SIZE = 20
         const val QUICK_PICKS = 16
         const val SUGGESTIONS = 12
+        // Further out than this (10 minutes), it's not the timing that's wrong.
+        const val MAX_SUBTITLE_DELAY_MS = 600_000L
         // Formats ExoPlayer has no reader for: straight to mpv.
         val MPV_ONLY = setOf("wmv", "asf", "rm", "rmvb", "ogm", "divx")
     }
